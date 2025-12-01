@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Kompos Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./style.css" />
+</head>
+
+<body>
+
+    <header class="header">
+        <div>
+            <h1>Kompos Dashboard</h1>
+            <p class="subtitle">Monitoring suhu & kelembapan (dummy)</p>
+        </div>
+        <span class="badge">Session: <span id="session-id">session_001</span></span>
+    </header>
+
+    <main class="container">
+
+        <!-- CONTROL PANEL -->
+        <section class="card control-card">
+            <div class="control-header">
+                <h2>Control Panel</h2>
+                <p class="status-text">
+                    Status:
+                    <span id="sessionStatus" class="status-pill status-stopped">
+                        Stopped
+                    </span>
+                </p>
+            </div>
+
+            <div class="control-buttons">
+                <button id="btnStart" class="btn-primary">Start Session</button>
+                <button id="btnStop" class="btn-secondary" disabled>Stop Session</button>
+                <button id="btnDummy" class="btn-ghost">Generate Dummy Data</button>
+            </div>
+
+            <p class="hint">
+                Start: ketika proses kompos dimulai. Stop: ketika proses selesai.
+                Dummy: simulasi kiriman data dari ESP32 (hanya bekerja saat status Running).
+            </p>
+        </section>
+
+        <!-- Card 1: Current Sensors (full width) -->
+        <article class="card sensor-card">
+            <h2>Current Sensors</h2>
+            <p class="last-update">Last update: <span id="lastUpdate">-</span></p>
+
+            <div class="sensor-grid">
+                <div class="sensor-item"><span class="label">Temperature</span><span class="value"
+                        id="temp">-</span> °C</div>
+                <div class="sensor-item"><span class="label">Moisture</span><span class="value" id="moist">-</span>
+                    %</div>
+                <div class="sensor-item"><span class="label">Gas</span><span class="value" id="gas">-</span></div>
+                <div class="sensor-item"><span class="label">pH</span><span class="value" id="ph">-</span></div>
+                <div class="sensor-item"><span class="label">EC</span><span class="value" id="ec">-</span> mS/cm
+                </div>
+                <div class="sensor-item"><span class="label">Maturity</span><span class="value"
+                        id="maturity">-</span> %</div>
+            </div>
+        </article>
+
+        <!-- Grid for Charts -->
+        <section class="charts-grid">
+            <!-- Card 2: Temperature Chart -->
+            <article class="card">
+                <h2>Temperature Chart (last 20 points)</h2>
+                <div class="chart-wrapper">
+                    <canvas id="tempChart"></canvas>
+                </div>
+            </article>
+
+            <!-- Card 3: Moisture Chart -->
+            <article class="card">
+                <h2>Moisture Chart (last 20 points)</h2>
+                <div class="chart-wrapper">
+                    <canvas id="moistChart"></canvas>
+                </div>
+            </article>
+        </section>
+
+    </main>
+
+    <!-- Firebase + Logic -->
+    <script type="module">
+        // Firebase imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import {
+            getDatabase,
+            ref,
+            onValue,
+            set,
+            update,
+            query,
+            orderByKey,
+            limitToLast,
+            get
+        } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+        // Chart helper
+        import {
+            createTempChart,
+            updateTempChart,
+            createMoistChart,
+            updateMoistChart
+        } from "./tempChart.js";
+
+        // Format number (fix float panjang)
+        const fmt = (v, d = 1) => (v == null || isNaN(v) ? "-" : Number(v).toFixed(d));
+
+        // Firebase config
+        const firebaseConfig = {
+            apiKey: "AIzaSyDQfa1dNCsUD4uGRzt-quIFUwGCstsf03o",
+            authDomain: "kompos-dashboard.firebaseapp.com",
+            databaseURL: "https://kompos-dashboard-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "kompos-dashboard",
+            storageBucket: "kompos-dashboard.firebasestorage.app",
+            messagingSenderId: "327419558526",
+            appId: "1:327419558526:web:45dac1672e4f220a70f62f",
+            measurementId: "G-BC874VMNGP"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        const SESSION_ID = "session_001";
+        document.getElementById("session-id").textContent = SESSION_ID;
+
+        const latestRef = ref(db, `latest/${SESSION_ID}`);
+        const logsRef = ref(db, `sensor_logs/${SESSION_ID}`);
+        const sessionRef = ref(db, `sessions/${SESSION_ID}`);
+
+        const statusEl = document.getElementById("sessionStatus");
+        const btnStart = document.getElementById("btnStart");
+        const btnStop = document.getElementById("btnStop");
+        const btnDummy = document.getElementById("btnDummy");
+
+        let currentStatus = "stopped";
+
+        // buat chart
+        const tempChart = createTempChart(
+            document.getElementById("tempChart").getContext("2d")
+        );
+
+        const moistChart = createMoistChart(
+            document.getElementById("moistChart").getContext("2d")
+        );
+
+        // ======= SESSION STATE LISTENER =======
+        onValue(sessionRef, async (snap) => {
+            let data = snap.val();
+
+            // kalau belum ada dokumen session sama sekali, inisialisasi
+            if (!data) {
+                const now = Math.floor(Date.now() / 1000);
+                data = {
+                    status: "stopped",
+                    started_at: null,
+                    ended_at: now
+                };
+                await set(sessionRef, data);
+            }
+
+            currentStatus = data.status || "stopped";
+            updateSessionUI();
+        });
+
+        function updateSessionUI() {
+            statusEl.textContent = currentStatus === "running" ? "Running" : "Stopped";
+
+            statusEl.classList.remove("status-running", "status-stopped");
+            statusEl.classList.add(
+                currentStatus === "running" ? "status-running" : "status-stopped"
+            );
+
+            if (currentStatus === "running") {
+                btnStart.disabled = true;
+                btnStop.disabled = false;
+            } else {
+                btnStart.disabled = false;
+                btnStop.disabled = true;
+            }
+        }
+
+        // ======= SENSOR LATEST LISTENER =======
+        onValue(latestRef, (snap) => {
+            const d = snap.val();
+            if (!d) return;
+
+            document.getElementById("temp").textContent = fmt(d.temperature, 1);
+            document.getElementById("moist").textContent = fmt(d.moisture, 0);
+            document.getElementById("gas").textContent = fmt(d.gas, 0);
+            document.getElementById("ph").textContent = fmt(d.ph, 2);
+            document.getElementById("ec").textContent = fmt(d.ec, 2);
+            document.getElementById("maturity").textContent = fmt(d.maturity, 0);
+
+            if (d.timestamp) {
+                document.getElementById("lastUpdate").textContent =
+                    new Date(d.timestamp * 1000).toLocaleString();
+            }
+
+            refreshChart();
+        });
+
+        // ======= BUTTON HANDLERS =======
+
+        // Start session
+        btnStart.addEventListener("click", async () => {
+            const now = Math.floor(Date.now() / 1000);
+
+            await update(sessionRef, {
+                status: "running",
+                started_at: now,
+                ended_at: null
+            });
+        });
+
+        // Stop session
+        btnStop.addEventListener("click", async () => {
+            const now = Math.floor(Date.now() / 1000);
+
+            await update(sessionRef, {
+                status: "stopped",
+                ended_at: now
+            });
+        });
+
+        // Generate Dummy Data – hanya kalau running
+        btnDummy.addEventListener("click", async () => {
+            if (currentStatus !== "running") {
+                alert("Session belum running. Tekan Start dulu.");
+                return;
+            }
+
+            const t = Math.floor(Date.now() / 1000);
+
+            const data = {
+                timestamp: t,
+                temperature: 55 + Math.random() * 15,
+                moisture: 40 + Math.round(Math.random() * 20),
+                gas: 100 + Math.round(Math.random() * 80),
+                ph: 7 + (Math.random() * 0.6 - 0.3),
+                ec: 2 + (Math.random() * 0.5 - 0.25),
+                maturity: 60 + Math.round(Math.random() * 20)
+            };
+
+            await set(ref(db, `sensor_logs/${SESSION_ID}/${t}`), data);
+            await set(latestRef, data);
+        });
+
+        // ======= CHART REFRESH =======
+        async function refreshChart() {
+            const q = query(logsRef, orderByKey(), limitToLast(20));
+            const snap = await get(q);
+            if (!snap.exists()) {
+                updateTempChart(tempChart, [], []);
+                updateMoistChart(moistChart, [], []);
+                return;
+            }
+
+            const labels = [];
+            const temps = [];
+            const moistures = [];
+
+            snap.forEach((child) => {
+                labels.push(new Date(child.key * 1000).toLocaleTimeString());
+                temps.push(child.val().temperature);
+                moistures.push(child.val().moisture);
+            });
+
+            updateTempChart(tempChart, labels, temps);
+            updateMoistChart(moistChart, labels, moistures);
+        }
+    </script>
+</body>
+
+</html>
