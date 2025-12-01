@@ -36,6 +36,7 @@
                 <button id="btnStart" class="btn-primary">Start Session</button>
                 <button id="btnStop" class="btn-secondary" disabled>Stop Session</button>
                 <button id="btnDummy" class="btn-ghost">Generate Dummy Data</button>
+                <button id="btnDummyImage" class="btn-ghost">Dummy Image</button>
             </div>
 
             <p class="hint">
@@ -44,22 +45,67 @@
             </p>
         </section>
 
+        <section class="card threshold-card">
+            <h2>Threshold Settings</h2>
+
+            <div class="threshold-grid">
+                <div>
+                    <label>Temperature Min (°C)</label>
+                    <input id="thTempMin" type="number" />
+                </div>
+
+                <div>
+                    <label>Temperature Max (°C)</label>
+                    <input id="thTempMax" type="number" />
+                </div>
+
+                <div>
+                    <label>Moisture Min (%)</label>
+                    <input id="thMoistMin" type="number" />
+                </div>
+
+                <div>
+                    <label>Moisture Max (%)</label>
+                    <input id="thMoistMax" type="number" />
+                </div>
+            </div>
+
+            <button id="btnSaveThreshold" class="btn-primary" style="margin-top:12px;">
+                Save Threshold
+            </button>
+        </section>
+
+
         <!-- Card 1: Current Sensors (full width) -->
-        <article class="card sensor-card">
+        <article class="card sensor-card" id="currentCard">
             <h2>Current Sensors</h2>
             <p class="last-update">Last update: <span id="lastUpdate">-</span></p>
+            <!-- Di dalam card sensor, tambahkan setelah last-update -->
+            <div class="alert-container">
+                <p class="alert-message" id="tempAlert">
+                    <span class="alert-icon">⚠️</span>
+                    <span class="alert-text"></span>
+                </p>
+                <p class="alert-message" id="moistAlert">
+                    <span class="alert-icon">⚠️</span>
+                    <span class="alert-text"></span>
+                </p>
+            </div>
+            <!-- Di dalam card sensor, tambahkan alert untuk moisture -->
+            <p class="alert-message" id="tempAlert" style="display: none;"></p>
+            <p class="alert-message" id="moistAlert" style="display: none;"></p>
 
             <div class="sensor-grid">
-                <div class="sensor-item"><span class="label">Temperature</span><span class="value"
-                        id="temp">-</span> °C</div>
+                <div class="sensor-item"><span class="label">Temperature</span><span class="value" id="temp">-</span> °C
+                </div>
                 <div class="sensor-item"><span class="label">Moisture</span><span class="value" id="moist">-</span>
                     %</div>
                 <div class="sensor-item"><span class="label">Gas</span><span class="value" id="gas">-</span></div>
                 <div class="sensor-item"><span class="label">pH</span><span class="value" id="ph">-</span></div>
                 <div class="sensor-item"><span class="label">EC</span><span class="value" id="ec">-</span> mS/cm
                 </div>
-                <div class="sensor-item"><span class="label">Maturity</span><span class="value"
-                        id="maturity">-</span> %</div>
+                <div class="sensor-item"><span class="label">Maturity</span><span class="value" id="maturity">-</span> %
+                </div>
             </div>
         </article>
 
@@ -78,6 +124,22 @@
                 <h2>Moisture Chart (last 20 points)</h2>
                 <div class="chart-wrapper">
                     <canvas id="moistChart"></canvas>
+                </div>
+            </article>
+        </section>
+
+        <!-- Card 4: ESP32-CAM image -->
+        <section class="image-section">
+            <article class="card image-card">
+                <h2>Compost Camera (latest)</h2>
+                <p class="last-update">
+                    Last capture: <span id="imgTimestamp">-</span>
+                </p>
+                <div class="image-frame">
+                    <img id="compostImage" src="" alt="Latest compost image" />
+                    <p class="image-placeholder" id="imagePlaceholder">
+                        No image captured yet.
+                    </p>
                 </div>
             </article>
         </section>
@@ -111,6 +173,21 @@
         // Format number (fix float panjang)
         const fmt = (v, d = 1) => (v == null || isNaN(v) ? "-" : Number(v).toFixed(d));
 
+        const DEFAULT_THRESHOLDS = {
+            temp_min: 55,
+            temp_max: 65,
+            moist_min: 40,
+            moist_max: 60,
+        };
+        // Threshold suhu maksimum (°C)
+        const thTempMinEl = document.getElementById("thTempMin");
+        const thTempMaxEl = document.getElementById("thTempMax");
+        const thMoistMinEl = document.getElementById("thMoistMin");
+        const thMoistMaxEl = document.getElementById("thMoistMax");
+        const btnSaveThreshold = document.getElementById("btnSaveThreshold");
+
+
+
         // Firebase config
         const firebaseConfig = {
             apiKey: "AIzaSyDQfa1dNCsUD4uGRzt-quIFUwGCstsf03o",
@@ -131,14 +208,30 @@
 
         const latestRef = ref(db, `latest/${SESSION_ID}`);
         const logsRef = ref(db, `sensor_logs/${SESSION_ID}`);
+        const currentCard = document.getElementById("currentCard");
+        const tempAlertEl = document.getElementById("tempAlert");
+
         const sessionRef = ref(db, `sessions/${SESSION_ID}`);
+        const imagesRef = ref(db, `images/${SESSION_ID}`);
+
+        const thresholdRef = ref(db, `sessions/${SESSION_ID}/threshold`);
+
+
 
         const statusEl = document.getElementById("sessionStatus");
         const btnStart = document.getElementById("btnStart");
         const btnStop = document.getElementById("btnStop");
         const btnDummy = document.getElementById("btnDummy");
 
+        const btnDummyImage = document.getElementById("btnDummyImage");
+        const imgEl = document.getElementById("compostImage");
+        const imgTimeEl = document.getElementById("imgTimestamp");
+        const imgPlaceholderEl = document.getElementById("imagePlaceholder");
+
+
         let currentStatus = "stopped";
+        let thresholds = { ...DEFAULT_THRESHOLDS };
+        let lastLatest = null;
 
         // buat chart
         const tempChart = createTempChart(
@@ -168,6 +261,29 @@
             updateSessionUI();
         });
 
+        // Ubah bagian threshold initialization
+        onValue(thresholdRef, async (snap) => {
+            let t = snap.val();
+
+            if (!t) {
+                await update(thresholdRef, DEFAULT_THRESHOLDS);
+                t = DEFAULT_THRESHOLDS;
+            }
+
+            thresholds = { ...DEFAULT_THRESHOLDS, ...t };
+
+            thTempMinEl.value = thresholds.temp_min;
+            thTempMaxEl.value = thresholds.temp_max;
+            thMoistMinEl.value = thresholds.moist_min;
+            thMoistMaxEl.value = thresholds.moist_max;
+
+            applyTempAlert();
+            refreshChart();
+        });
+
+
+
+
         function updateSessionUI() {
             statusEl.textContent = currentStatus === "running" ? "Running" : "Stopped";
 
@@ -186,9 +302,12 @@
         }
 
         // ======= SENSOR LATEST LISTENER =======
+
         onValue(latestRef, (snap) => {
             const d = snap.val();
             if (!d) return;
+
+            lastLatest = d; // simpan global
 
             document.getElementById("temp").textContent = fmt(d.temperature, 1);
             document.getElementById("moist").textContent = fmt(d.moisture, 0);
@@ -202,8 +321,91 @@
                     new Date(d.timestamp * 1000).toLocaleString();
             }
 
+            applyTempAlert();
             refreshChart();
         });
+
+
+        function applyTempAlert() {
+            if (!lastLatest) return;
+
+            const tempVal = Number(lastLatest.temperature);
+            const moistVal = Number(lastLatest.moisture);
+
+            const { temp_min, temp_max, moist_min, moist_max } = thresholds;
+            const tempAlertEl = document.getElementById("tempAlert");
+            const moistAlertEl = document.getElementById("moistAlert");
+
+            // Temperature alert
+            if (!isNaN(tempVal) && (tempVal < temp_min || tempVal > temp_max)) {
+                tempAlertEl.textContent =
+                    `⚠️ Temperature ${fmt(tempVal, 1)} °C outside range ` +
+                    `${temp_min}–${temp_max} °C.`;
+                tempAlertEl.style.display = "block";
+                tempAlertEl.style.color = "#ff4d4f";
+            } else {
+                tempAlertEl.style.display = "none";
+            }
+
+            // Moisture alert
+            if (!isNaN(moistVal) && (moistVal < moist_min || moistVal > moist_max)) {
+                moistAlertEl.textContent =
+                    `⚠️ Moisture ${fmt(moistVal, 0)}% outside range ` +
+                    `${moist_min}–${moist_max}%.`;
+                moistAlertEl.style.display = "block";
+                moistAlertEl.style.color = "#ffa940";
+            } else {
+                moistAlertEl.style.display = "none";
+            }
+
+            // Tambah/remove class alert pada card
+            if (currentCard) {
+                if ((tempAlertEl.style.display === "block") || (moistAlertEl.style.display === "block")) {
+                    currentCard.classList.add("card-alert");
+                } else {
+                    currentCard.classList.remove("card-alert");
+                }
+            }
+        }
+
+
+
+        // ======= ESP32-CAM IMAGE LISTENER =======
+        onValue(imagesRef, (snap) => {
+            const data = snap.val();
+
+            if (!data) {
+                imgEl.style.display = "none";
+                imgPlaceholderEl.style.display = "block";
+                imgTimeEl.textContent = "-";
+                return;
+            }
+
+            // Ambil entry terakhir berdasarkan key timestamp
+            const entries = Object.entries(data).sort(
+                (a, b) => Number(a[0]) - Number(b[0])
+            );
+            const [ts, info] = entries[entries.length - 1];
+
+            if (!info || !info.url) {
+                imgEl.style.display = "none";
+                imgPlaceholderEl.style.display = "block";
+                imgTimeEl.textContent = "-";
+                return;
+            }
+
+            imgEl.src = info.url;
+            imgEl.style.display = "block";
+            imgPlaceholderEl.style.display = "none";
+
+            const t = info.timestamp || Number(ts);
+            if (t) {
+                imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
+            } else {
+                imgTimeEl.textContent = "-";
+            }
+        });
+
 
         // ======= BUTTON HANDLERS =======
 
@@ -217,6 +419,19 @@
                 ended_at: null
             });
         });
+
+        btnSaveThreshold.addEventListener("click", async () => {
+            const t = {
+                temp_min: Number(thTempMinEl.value),
+                temp_max: Number(thTempMaxEl.value),
+                moist_min: Number(thMoistMinEl.value),
+                moist_max: Number(thMoistMaxEl.value)
+            };
+
+            await update(thresholdRef, t);
+            alert("Threshold updated.");
+        });
+
 
         // Stop session
         btnStop.addEventListener("click", async () => {
@@ -251,13 +466,38 @@
             await set(latestRef, data);
         });
 
+        // Dummy Image – simulasi ESP32-CAM (hanya ketika running)
+        btnDummyImage.addEventListener("click", async () => {
+            if (currentStatus !== "running") {
+                alert("Session belum running. Tekan Start dulu.");
+                return;
+            }
+
+            const t = Math.floor(Date.now() / 1000);
+            // Dummy URL pakai picsum (hanya buat testing)
+            const url = `https://picsum.photos/seed/${t}/640/360`;
+
+            await set(ref(db, `images/${SESSION_ID}/${t}`), {
+                url,
+                timestamp: t
+            });
+        });
+
+
         // ======= CHART REFRESH =======
+        // Di bagian script index.html, ubah fungsi refreshChart:
         async function refreshChart() {
             const q = query(logsRef, orderByKey(), limitToLast(20));
             const snap = await get(q);
+
+            const tMin = thresholds.temp_min ?? null;
+            const tMax = thresholds.temp_max ?? null;
+            const mMin = thresholds.moist_min ?? null;
+            const mMax = thresholds.moist_max ?? null;
+
             if (!snap.exists()) {
-                updateTempChart(tempChart, [], []);
-                updateMoistChart(moistChart, [], []);
+                updateTempChart(tempChart, [], [], tMin, tMax);
+                updateMoistChart(moistChart, [], [], mMin, mMax);
                 return;
             }
 
@@ -266,14 +506,18 @@
             const moistures = [];
 
             snap.forEach((child) => {
+                const v = child.val();
                 labels.push(new Date(child.key * 1000).toLocaleTimeString());
-                temps.push(child.val().temperature);
-                moistures.push(child.val().moisture);
+                temps.push(v.temperature);
+                moistures.push(v.moisture);
             });
 
-            updateTempChart(tempChart, labels, temps);
-            updateMoistChart(moistChart, labels, moistures);
+            updateTempChart(tempChart, labels, temps, tMin, tMax);
+            updateMoistChart(moistChart, labels, moistures, mMin, mMax);
         }
+
+
+
     </script>
 </body>
 
