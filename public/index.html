@@ -37,6 +37,10 @@
                 <button id="btnStop" class="btn-secondary" disabled>Stop Session</button>
                 <button id="btnDummy" class="btn-ghost">Generate Dummy Data</button>
                 <button id="btnDummyImage" class="btn-ghost">Dummy Image</button>
+                <input type="file" id="camFile" accept="image/*" style="display:none" />
+                <button id="btnUploadTestImage" class="btn-ghost">
+                    Upload Test Image
+                </button>
             </div>
 
             <p class="hint">
@@ -144,6 +148,24 @@
             </article>
         </section>
 
+        <!-- Photo History -->
+        <section class="image-section">
+            <article class="card image-history-card">
+                <h2>Photo History</h2>
+
+                <div id="imageHistory" class="image-history-grid">
+                    <!-- thumbnails akan diisi via JS -->
+                </div>
+
+                <div class="image-history-controls">
+                    <button id="imgPrev" class="btn-pagination" disabled>← Previous</button>
+                    <span id="imgPageLabel" class="image-page-label">Page 1 / 1</span>
+                    <button id="imgNext" class="btn-pagination" disabled>Next →</button>
+                </div>
+            </article>
+        </section>
+
+
     </main>
 
     <!-- Firebase + Logic -->
@@ -161,6 +183,14 @@
             limitToLast,
             get
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+        import {
+            getStorage,
+            ref as storageRef,
+            uploadBytes,
+            getDownloadURL
+        } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+
 
         // Chart helper
         import {
@@ -185,23 +215,26 @@
         const thMoistMinEl = document.getElementById("thMoistMin");
         const thMoistMaxEl = document.getElementById("thMoistMax");
         const btnSaveThreshold = document.getElementById("btnSaveThreshold");
+        const fileInputCam = document.getElementById("camFile");
+        const btnUploadTestImage = document.getElementById("btnUploadTestImage");
 
 
 
         // Firebase config
         const firebaseConfig = {
-            apiKey: "AIzaSyDQfa1dNCsUD4uGRzt-quIFUwGCstsf03o",
-            authDomain: "kompos-dashboard.firebaseapp.com",
-            databaseURL: "https://kompos-dashboard-default-rtdb.asia-southeast1.firebasedatabase.app",
-            projectId: "kompos-dashboard",
-            storageBucket: "kompos-dashboard.firebasestorage.app",
-            messagingSenderId: "327419558526",
-            appId: "1:327419558526:web:45dac1672e4f220a70f62f",
-            measurementId: "G-BC874VMNGP"
+            apiKey: "AIzaSyDJ_vVRBcNu9mBHeJY9L42rjH20IlxTLgw",
+            authDomain: "compost-box.firebaseapp.com",
+            databaseURL: "https://compost-box-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "compost-box",
+            storageBucket: "compost-box.firebasestorage.app",
+            messagingSenderId: "161024168281",
+            appId: "1:161024168281:web:91fb7c6dd22fc7baf97c48",
+            measurementId: "G-69FL0VCF5N"
         };
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
+        const storage = getStorage(app);
 
         const SESSION_ID = "session_001";
         document.getElementById("session-id").textContent = SESSION_ID;
@@ -227,6 +260,17 @@
         const imgEl = document.getElementById("compostImage");
         const imgTimeEl = document.getElementById("imgTimestamp");
         const imgPlaceholderEl = document.getElementById("imagePlaceholder");
+        const imageHistoryEl = document.getElementById("imageHistory");
+
+        // pagination controls
+        const imgPrevBtn = document.getElementById("imgPrev");
+        const imgNextBtn = document.getElementById("imgNext");
+        const imgPageLabel = document.getElementById("imgPageLabel");
+
+        // state history
+        let imageEntries = [];  // array [timestamp, info]
+        let imagePage = 0;
+        const IMAGE_PAGE_SIZE = 6;
 
 
         let currentStatus = "stopped";
@@ -368,7 +412,107 @@
             }
         }
 
+        function renderImageHistory() {
+            if (!imageHistoryEl) return;
 
+            // Reset grid
+            imageHistoryEl.innerHTML = "";
+
+            // Jika tidak ada gambar
+            if (!imageEntries || imageEntries.length === 0) {
+                for (let i = 0; i < IMAGE_PAGE_SIZE; i++) {
+                    const emptyDiv = document.createElement("div");
+                    emptyDiv.className = "image-history-item empty";
+                    emptyDiv.textContent = "No Image";
+                    imageHistoryEl.appendChild(emptyDiv);
+                }
+
+                if (imgPageLabel) imgPageLabel.textContent = "Page 0 / 0";
+                if (imgPrevBtn) imgPrevBtn.disabled = true;
+                if (imgNextBtn) imgNextBtn.disabled = true;
+                return;
+            }
+
+            // Hitung pagination
+            const totalPages = Math.ceil(imageEntries.length / IMAGE_PAGE_SIZE);
+            if (totalPages === 0) {
+                if (imgPageLabel) imgPageLabel.textContent = "Page 0 / 0";
+                if (imgPrevBtn) imgPrevBtn.disabled = true;
+                if (imgNextBtn) imgNextBtn.disabled = true;
+                return;
+            }
+
+            // Pastikan page valid
+            if (imagePage >= totalPages) imagePage = totalPages - 1;
+            if (imagePage < 0) imagePage = 0;
+
+            const start = imagePage * IMAGE_PAGE_SIZE;
+            const end = start + IMAGE_PAGE_SIZE;
+            const pageItems = imageEntries.slice(start, end);
+
+            // Render gambar yang ada
+            pageItems.forEach(([ts, item]) => {
+                if (!item || !item.url) return;
+
+                const t = item.timestamp || ts;
+                const timeStr = t
+                    ? new Date(t * 1000).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    })
+                    : String(ts);
+
+                const div = document.createElement("div");
+                div.className = "image-history-item";
+
+                // Kontainer gambar
+                const imgContainer = document.createElement("div");
+                imgContainer.className = "image-history-img-container";
+
+                const img = document.createElement("img");
+                img.src = item.url;
+                img.alt = `Compost ${timeStr}`;
+                img.loading = "lazy"; // Optimasi loading
+
+                imgContainer.appendChild(img);
+
+                // Metadata
+                const meta = document.createElement("div");
+                meta.className = "image-history-meta";
+                meta.textContent = timeStr;
+
+                div.appendChild(imgContainer);
+                div.appendChild(meta);
+
+                // Klik untuk tampilkan sebagai gambar utama
+                div.addEventListener("click", () => {
+                    imgEl.src = item.url;
+                    imgEl.style.display = "block";
+                    imgPlaceholderEl.style.display = "none";
+                    if (t) {
+                        imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
+                    }
+                });
+
+                imageHistoryEl.appendChild(div);
+            });
+
+            // Tambah placeholder untuk sisa slot yang kosong
+            const remainingSlots = IMAGE_PAGE_SIZE - pageItems.length;
+            for (let i = 0; i < remainingSlots; i++) {
+                const emptyDiv = document.createElement("div");
+                emptyDiv.className = "image-history-item empty";
+                emptyDiv.textContent = "Empty";
+                imageHistoryEl.appendChild(emptyDiv);
+            }
+
+            // Update UI pagination
+            if (imgPageLabel) {
+                imgPageLabel.textContent = `Page ${imagePage + 1} / ${totalPages}`;
+            }
+            if (imgPrevBtn) imgPrevBtn.disabled = imagePage === 0;
+            if (imgNextBtn) imgNextBtn.disabled = imagePage >= totalPages - 1;
+        }
 
         // ======= ESP32-CAM IMAGE LISTENER =======
         onValue(imagesRef, (snap) => {
@@ -378,33 +522,93 @@
                 imgEl.style.display = "none";
                 imgPlaceholderEl.style.display = "block";
                 imgTimeEl.textContent = "-";
+                if (imageHistoryEl) imageHistoryEl.innerHTML = "";
                 return;
             }
 
-            // Ambil entry terakhir berdasarkan key timestamp
-            const entries = Object.entries(data).sort(
-                (a, b) => Number(a[0]) - Number(b[0])
-            );
-            const [ts, info] = entries[entries.length - 1];
+            // sort semua entry berdasarkan timestamp (key)
+            const entries = Object.entries(data)
+                .map(([k, v]) => [Number(k), v])
+                .filter(([ts, v]) => v && v.url)
+                .sort((a, b) => b[0] - a[0]); // newest-first
 
-            if (!info || !info.url) {
-                imgEl.style.display = "none";
-                imgPlaceholderEl.style.display = "block";
-                imgTimeEl.textContent = "-";
-                return;
-            }
+            imageEntries = entries;
 
-            imgEl.src = info.url;
+            // ========== LATEST ==========
+            const [latestTs, latestInfo] = entries[0];
+
+            imgEl.src = latestInfo.url;
             imgEl.style.display = "block";
             imgPlaceholderEl.style.display = "none";
 
-            const t = info.timestamp || Number(ts);
-            if (t) {
-                imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
-            } else {
-                imgTimeEl.textContent = "-";
+            const t = latestInfo.timestamp || latestTs;
+            imgTimeEl.textContent = t
+                ? new Date(t * 1000).toLocaleString()
+                : "-";
+
+            // reset ke halaman pertama tiap ada update baru
+            imagePage = 0;
+            renderImageHistory();
+
+            // ========== HISTORY (misal 6 terakhir) ==========
+            if (imageHistoryEl) {
+                const MAX_HISTORY = 6;
+                const latestEntries = entries.slice(-MAX_HISTORY).reverse(); // terbaru di depan
+
+                imageHistoryEl.innerHTML = "";
+
+                latestEntries.forEach(([key, item]) => {
+                    if (!item || !item.url) return;
+                    const t = item.timestamp || Number(key);
+                    const timeStr = t
+                        ? new Date(t * 1000).toLocaleTimeString()
+                        : key;
+
+                    const div = document.createElement("div");
+                    div.className = "image-history-item";
+                    div.innerHTML = `
+        <img src="${item.url}" alt="Compost ${timeStr}" />
+        <div class="image-history-meta">
+          ${timeStr}
+        </div>
+      `;
+
+                    // klik thumbnail -> jadikan sebagai gambar utama
+                    div.addEventListener("click", () => {
+                        imgEl.src = item.url;
+                        imgEl.style.display = "block";
+                        imgPlaceholderEl.style.display = "none";
+                        if (t) {
+                            imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
+                        }
+                    });
+
+                    imageHistoryEl.appendChild(div);
+                });
             }
         });
+
+        if (imgPrevBtn) {
+            imgPrevBtn.addEventListener("click", () => {
+                if (imagePage > 0) {
+                    imagePage--;
+                    renderImageHistory();
+                }
+            });
+        }
+
+        if (imgNextBtn) {
+            imgNextBtn.addEventListener("click", () => {
+                const totalPages = Math.ceil(imageEntries.length / IMAGE_PAGE_SIZE);
+                if (imagePage < totalPages - 1) {
+                    imagePage++;
+                    renderImageHistory();
+                }
+            });
+        }
+
+
+
 
 
         // ======= BUTTON HANDLERS =======
@@ -466,6 +670,8 @@
             await set(latestRef, data);
         });
 
+
+
         // Dummy Image – simulasi ESP32-CAM (hanya ketika running)
         btnDummyImage.addEventListener("click", async () => {
             if (currentStatus !== "running") {
@@ -482,6 +688,48 @@
                 timestamp: t
             });
         });
+
+        // Klik tombol -> buka file picker
+        btnUploadTestImage.addEventListener("click", () => {
+            fileInputCam.click();
+        });
+
+        // Saat file dipilih -> upload ke Storage + simpan URL ke RTDB
+        fileInputCam.addEventListener("change", async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            if (currentStatus !== "running") {
+                alert("Session belum running. Tekan Start dulu.");
+                fileInputCam.value = "";
+                return;
+            }
+
+            try {
+                const t = Math.floor(Date.now() / 1000);
+                const path = `images/${SESSION_ID}/${t}_${file.name}`;
+
+                // 1) Upload ke Firebase Storage
+                const sRef = storageRef(storage, path);
+                await uploadBytes(sRef, file);
+
+                // 2) Ambil download URL
+                const url = await getDownloadURL(sRef);
+
+                // 3) Tulis metadata ke RTDB
+                await set(ref(db, `images/${SESSION_ID}/${t}`), {
+                    url,
+                    timestamp: t
+                });
+
+                fileInputCam.value = "";
+                console.log("Uploaded test image:", url);
+            } catch (err) {
+                console.error("Upload error:", err);
+                alert("Gagal upload gambar, lihat console.");
+            }
+        });
+
 
 
         // ======= CHART REFRESH =======

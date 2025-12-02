@@ -25,6 +25,7 @@ body {
   color: var(--text);
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   line-height: 1.5;
+  overflow-x: hidden; /* Mencegah scroll horizontal di body */
 }
 
 /* ===== HEADER ===== */
@@ -76,6 +77,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  width: 100%;
 }
 
 /* ===== CONTROL PANEL ===== */
@@ -344,6 +346,46 @@ body {
 .sensor-item:nth-child(5) .value { color: #9254de; } /* EC */
 .sensor-item:nth-child(6) .value { color: #f759ab; } /* Maturity */
 
+/* ===== ALERTS ===== */
+.alert-container {
+  margin-bottom: 20px;
+}
+
+.alert-message {
+  margin: 10px 0;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  display: none;
+  align-items: center;
+  gap: 10px;
+  font-weight: 500;
+}
+
+#tempAlert {
+  background: rgba(255, 77, 79, 0.15);
+  border: 1px solid rgba(255, 77, 79, 0.3);
+  color: #ffb3b5;
+}
+
+#moistAlert {
+  background: rgba(255, 169, 64, 0.15);
+  border: 1px solid rgba(255, 169, 64, 0.3);
+  color: #ffd8a8;
+}
+
+.card-alert {
+  border: 1px solid var(--danger);
+  box-shadow: 0 0 30px rgba(255, 77, 79, 0.2);
+  animation: alertPulse 1.5s infinite;
+}
+
+@keyframes alertPulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.3); }
+  70% { box-shadow: 0 0 0 10px rgba(255, 77, 79, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
+}
+
 /* ===== CHARTS GRID (2 KOLOM SAMPING) ===== */
 .charts-grid {
   display: grid;
@@ -375,7 +417,7 @@ body {
   height: 320px;
 }
 
-/* ===== IMAGE SECTION ===== */
+/* ===== IMAGE SECTIONS ===== */
 .image-section {
   margin-top: 20px;
 }
@@ -386,6 +428,8 @@ body {
   border-radius: 16px;
   padding: 24px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .image-card h2 {
@@ -424,42 +468,6 @@ body {
   background: rgba(255, 255, 255, 0.03);
   border-radius: 8px;
   border: 2px dashed var(--border);
-}
-
-/* ===== ALERTS ===== */
-.alert-message {
-  margin: 15px 0;
-  padding: 12px 16px;
-  border-radius: 8px;
-  font-size: 0.95rem;
-  display: none;
-  align-items: center;
-  gap: 10px;
-  font-weight: 500;
-}
-
-#tempAlert {
-  background: rgba(255, 77, 79, 0.15);
-  border: 1px solid rgba(255, 77, 79, 0.3);
-  color: #ffb3b5;
-}
-
-#moistAlert {
-  background: rgba(255, 169, 64, 0.15);
-  border: 1px solid rgba(255, 169, 64, 0.3);
-  color: #ffd8a8;
-}
-
-.card-alert {
-  border: 1px solid var(--danger);
-  box-shadow: 0 0 30px rgba(255, 77, 79, 0.2);
-  animation: alertPulse 1.5s infinite;
-}
-
-@keyframes alertPulse {
-  0% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0.3); }
-  70% { box-shadow: 0 0 0 10px rgba(255, 77, 79, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
 }
 
 /* ===== THRESHOLD SETTINGS ===== */
@@ -519,14 +527,196 @@ body {
   background: var(--bg-card);
 }
 
+/* ===== PHOTO HISTORY SECTION (DIPERBAIKI) ===== */
+.image-history-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.image-history-card h2 {
+  margin: 0 0 20px 0;
+  color: var(--text);
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+.image-history-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr); /* 6 kolom tetap */
+  gap: 12px;
+  width: 100%;
+  min-height: 150px; /* Tinggi minimum untuk konsistensi */
+  box-sizing: border-box;
+}
+
+/* Atur jumlah kolom responsif */
+@media (max-width: 1200px) {
+  .image-history-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .image-history-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .image-history-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.image-history-item {
+  position: relative;
+  background: var(--grid-bg);
+  border-radius: 12px; /* Radius lebih besar */
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  aspect-ratio: 4/3; /* Rasio tetap 4:3 */
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0; /* Penting untuk grid */
+}
+
+/* Item kosong (placeholder) */
+.image-history-item.empty {
+  background: rgba(255, 255, 255, 0.03);
+  border: 2px dashed var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: default;
+}
+
+.image-history-item.empty:hover {
+  transform: none;
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.image-history-item:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+  box-shadow: 0 8px 20px rgba(0, 208, 160, 0.2);
+}
+
+/* Kontainer gambar untuk fill */
+.image-history-img-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--grid-bg);
+}
+
+.image-history-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* Ganti dari contain ke cover */
+  display: block;
+  transition: transform 0.5s ease;
+}
+
+.image-history-item:hover img {
+  transform: scale(1.08); /* Zoom lebih halus */
+}
+
+.image-history-meta {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 10px 8px;
+  font-size: 0.8rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, transparent 100%);
+  color: #ffffff;
+  text-align: center;
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.image-history-item:hover .image-history-meta {
+  opacity: 1;
+}
+
+/* Pagination controls */
+.image-history-controls {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+}
+
+.image-page-label {
+  font-size: 0.9rem;
+  color: var(--text);
+  font-weight: 500;
+  min-width: 100px;
+  text-align: center;
+}
+
+/* Tombol pagination khusus */
+.btn-pagination {
+  background: transparent;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 20px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.9rem;
+  min-width: 100px;
+}
+
+.btn-pagination:hover:not(:disabled) {
+  background: rgba(0, 208, 160, 0.1);
+  transform: translateY(-2px);
+}
+
+.btn-pagination:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+}
+
+
 /* ===== RESPONSIVE DESIGN ===== */
-@media (max-width: 1024px) {
+@media (max-width: 1200px) {
   .charts-grid {
     grid-template-columns: 1fr;
   }
   
   .sensor-grid {
     grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 1024px) {
+  .container {
+    padding: 20px;
+  }
+  
+  .image-history-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   }
 }
 
@@ -566,7 +756,66 @@ body {
   .value {
     font-size: 1.8rem;
   }
+  
+  .image-history-grid {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  }
+  
+  .chart-wrapper {
+    height: 280px;
+  }
 }
+
+.image-history-card h2 {
+  margin-bottom: 10px;
+}
+
+.image-history-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.image-history-item {
+  position: relative;
+  background: #1a1a24;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.image-history-item img {
+  width: 100%;
+  height: 100px;
+  object-fit: cover;
+  display: block;
+}
+
+.image-history-meta {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 4px 6px;
+  font-size: 0.7rem;
+  background: rgba(0, 0, 0, 0.55);
+  color: #f0f0f0;
+}
+
+/* Pagination controls */
+.image-history-controls {
+  margin-top: 8px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+}
+
+.image-page-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 
 @media (max-width: 480px) {
   .sensor-grid {
@@ -586,5 +835,18 @@ body {
   .btn-ghost {
     padding: 12px 20px;
     font-size: 0.95rem;
+  }
+  
+  .charts-grid .card,
+  .sensor-card,
+  .control-card,
+  .threshold-card,
+  .image-card,
+  .image-history-card {
+    padding: 20px;
+  }
+  
+  .image-history-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
