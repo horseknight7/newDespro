@@ -9,164 +9,132 @@
 </head>
 
 <body>
-
-    <header class="header">
-        <div>
-            <h1>Kompos Dashboard</h1>
-            <p class="subtitle">Monitoring suhu & kelembapan (dummy)</p>
-        </div>
-        <span class="badge">Session: <span id="session-id">session_001</span></span>
-    </header>
-
-    <main class="container">
-
-        <!-- CONTROL PANEL -->
-        <section class="card control-card">
-            <div class="control-header">
-                <h2>Control Panel</h2>
-                <p class="status-text">
-                    Status:
-                    <span id="sessionStatus" class="status-pill status-stopped">
-                        Stopped
-                    </span>
-                </p>
-            </div>
-
-            <div class="control-buttons">
-                <button id="btnStart" class="btn-primary">Start Session</button>
-                <button id="btnStop" class="btn-secondary" disabled>Stop Session</button>
-                <button id="btnDummy" class="btn-ghost">Generate Dummy Data</button>
-                <button id="btnDummyImage" class="btn-ghost">Dummy Image</button>
-                <input type="file" id="camFile" accept="image/*" style="display:none" />
-                <button id="btnUploadTestImage" class="btn-ghost">
-                    Upload Test Image
-                </button>
-            </div>
-
-            <p class="hint">
-                Start: ketika proses kompos dimulai. Stop: ketika proses selesai.
-                Dummy: simulasi kiriman data dari ESP32 (hanya bekerja saat status Running).
-            </p>
-        </section>
-
-        <section class="card threshold-card">
-            <h2>Threshold Settings</h2>
-
-            <div class="threshold-grid">
-                <div>
-                    <label>Temperature Min (°C)</label>
-                    <input id="thTempMin" type="number" />
-                </div>
-
-                <div>
-                    <label>Temperature Max (°C)</label>
-                    <input id="thTempMax" type="number" />
-                </div>
-
-                <div>
-                    <label>Moisture Min (%)</label>
-                    <input id="thMoistMin" type="number" />
-                </div>
-
-                <div>
-                    <label>Moisture Max (%)</label>
-                    <input id="thMoistMax" type="number" />
+    <div class="app-container">
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>Kompos<br>Dashboard</h1>
+                <div class="session-info">
+                    <span class="badge-label">Session</span>
+                    <span id="session-id" class="badge-value">session_001</span>
                 </div>
             </div>
 
-            <button id="btnSaveThreshold" class="btn-primary" style="margin-top:12px;">
-                Save Threshold
-            </button>
-        </section>
-
-
-        <!-- Card 1: Current Sensors (full width) -->
-        <article class="card sensor-card" id="currentCard">
-            <h2>Current Sensors</h2>
-            <p class="last-update">Last update: <span id="lastUpdate">-</span></p>
-            <!-- Di dalam card sensor, tambahkan setelah last-update -->
-            <div class="alert-container">
-                <p class="alert-message" id="tempAlert">
-                    <span class="alert-icon">⚠️</span>
-                    <span class="alert-text"></span>
-                </p>
-                <p class="alert-message" id="moistAlert">
-                    <span class="alert-icon">⚠️</span>
-                    <span class="alert-text"></span>
-                </p>
-            </div>
-            <!-- Di dalam card sensor, tambahkan alert untuk moisture -->
-            <p class="alert-message" id="tempAlert" style="display: none;"></p>
-            <p class="alert-message" id="moistAlert" style="display: none;"></p>
-
-            <div class="sensor-grid">
-                <div class="sensor-item"><span class="label">Temperature</span><span class="value" id="temp">-</span> °C
+            <div class="sidebar-section">
+                <div class="section-title">
+                    <h3>Control</h3>
+                    <span id="sessionStatus" class="status-pill status-stopped">Stopped</span>
                 </div>
-                <div class="sensor-item"><span class="label">Moisture</span><span class="value" id="moist">-</span>
-                    %</div>
-                <div class="sensor-item"><span class="label">Gas</span><span class="value" id="gas">-</span></div>
-                <div class="sensor-item"><span class="label">pH</span><span class="value" id="ph">-</span></div>
-                <div class="sensor-item"><span class="label">EC</span><span class="value" id="ec">-</span> mS/cm
-                </div>
-                <div class="sensor-item"><span class="label">Maturity</span><span class="value" id="maturity">-</span> %
+                <div class="control-grid">
+                    <button id="btnStart" class="btn-primary">Start</button>
+                    <button id="btnStop" class="btn-secondary" disabled>Stop</button>
+                    <button id="btnDummy" class="btn-ghost">Dummy Data</button>
+                    <button id="btnDummyImage" class="btn-ghost">Dummy Cam</button>
+                    <input type="file" id="camFile" accept="image/*" style="display:none" />
+                    <button id="btnUploadTestImage" class="btn-ghost">Upload Img</button>
                 </div>
             </div>
-        </article>
 
-        <!-- Grid for Charts -->
-        <section class="charts-grid">
-            <!-- Card 2: Temperature Chart -->
-            <article class="card">
-                <h2>Temperature Chart (last 20 points)</h2>
-                <div class="chart-wrapper">
-                    <canvas id="tempChart"></canvas>
+            <div class="sidebar-section">
+                <h3>Thresholds</h3>
+                <div class="threshold-form">
+                    <div class="form-group">
+                        <label>Temp (°C)</label>
+                        <div class="row">
+                            <input id="thTempMin" type="number" placeholder="Min" />
+                            <input id="thTempMax" type="number" placeholder="Max" />
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Moist (%)</label>
+                        <div class="row">
+                            <input id="thMoistMin" type="number" placeholder="Min" />
+                            <input id="thMoistMax" type="number" placeholder="Max" />
+                        </div>
+                    </div>
+                    <button id="btnSaveThreshold" class="btn-small">Save Settings</button>
                 </div>
-            </article>
+            </div>
+        </aside>
 
-            <!-- Card 3: Moisture Chart -->
-            <article class="card">
-                <h2>Moisture Chart (last 20 points)</h2>
-                <div class="chart-wrapper">
-                    <canvas id="moistChart"></canvas>
+        <!-- MAIN CONTENT -->
+        <main class="main-content">
+            <!-- TOP BAR: SENSORS -->
+            <header class="top-bar" id="currentCard">
+                <div class="sensor-list">
+                    <div class="sensor-pill temp">
+                        <span class="icon">🌡️</span>
+                        <span class="value" id="temp">-</span>
+                        <span class="unit">°C</span>
+                    </div>
+                    <div class="sensor-pill moist">
+                        <span class="icon">💧</span>
+                        <span class="value" id="moist">-</span>
+                        <span class="unit">%</span>
+                    </div>
+                    <div class="sensor-pill">
+                        <span class="label">Gas</span>
+                        <span class="value" id="gas">-</span>
+                    </div>
+                    <div class="sensor-pill">
+                        <span class="label">pH</span>
+                        <span class="value" id="ph">-</span>
+                    </div>
+                    <div class="sensor-pill">
+                        <span class="label">EC</span>
+                        <span class="value" id="ec">-</span>
+                    </div>
+                    <div class="sensor-pill">
+                        <span class="label">Mat</span>
+                        <span class="value" id="maturity">-</span>
+                        <span class="unit">%</span>
+                    </div>
                 </div>
-            </article>
-        </section>
-
-        <!-- Card 4: ESP32-CAM image -->
-        <section class="image-section">
-            <article class="card image-card">
-                <h2>Compost Camera (latest)</h2>
-                <p class="last-update">
-                    Last capture: <span id="imgTimestamp">-</span>
-                </p>
-                <div class="image-frame">
-                    <img id="compostImage" src="" alt="Latest compost image" />
-                    <p class="image-placeholder" id="imagePlaceholder">
-                        No image captured yet.
-                    </p>
+                <div class="meta-info">
+                    <span id="lastUpdate">Waiting for data...</span>
                 </div>
-            </article>
-        </section>
+                <!-- Alerts Container -->
+                <div id="tempAlert" class="alert-toast" style="display:none"></div>
+                <div id="moistAlert" class="alert-toast" style="display:none"></div>
+            </header>
 
-        <!-- Photo History -->
-        <section class="image-section">
-            <article class="card image-history-card">
-                <h2>Photo History</h2>
-
-                <div id="imageHistory" class="image-history-grid">
-                    <!-- thumbnails akan diisi via JS -->
+            <!-- DASHBOARD GRID -->
+            <div class="dashboard-layout">
+                <div class="charts-area">
+                    <div class="chart-box">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                    <div class="chart-box">
+                        <canvas id="moistChart"></canvas>
+                    </div>
                 </div>
 
-                <div class="image-history-controls">
-                    <button id="imgPrev" class="btn-pagination" disabled>← Previous</button>
-                    <span id="imgPageLabel" class="image-page-label">Page 1 / 1</span>
-                    <button id="imgNext" class="btn-pagination" disabled>Next →</button>
+                <div class="camera-area">
+                    <div class="camera-box">
+                        <div class="cam-header">
+                            <span>Live Feed</span>
+                            <span id="imgTimestamp" class="time-badge">-</span>
+                        </div>
+                        <div class="cam-view">
+                            <img id="compostImage" src="" alt="Live" />
+                            <div id="imagePlaceholder" class="placeholder">No Signal</div>
+                        </div>
+                    </div>
+                    <div class="history-box">
+                        <div class="history-header">
+                            <span>History</span>
+                            <div class="nav">
+                                <button id="imgPrev" disabled>&lt;</button>
+                                <span id="imgPageLabel">1/1</span>
+                                <button id="imgNext" disabled>&gt;</button>
+                            </div>
+                        </div>
+                        <div id="imageHistory" class="history-thumbs"></div>
+                    </div>
                 </div>
-            </article>
-        </section>
-
-
-    </main>
+            </div>
+        </main>
+    </div>
 
     <!-- Firebase + Logic -->
     <script type="module">
