@@ -14,9 +14,12 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <h1>Kompos<br>Dashboard</h1>
-                <div class="session-info">
-                    <span class="badge-label">Session</span>
-                    <span id="session-id" class="badge-value">session_001</span>
+                <div class="session-control">
+                    <select id="sessionSelect" class="session-select">
+                        <option value="session_001" selected>session_001</option>
+                    </select>
+                    <button id="btnNewSession" class="btn-icon" title="New Session">+</button>
+                    <button id="btnDeleteSession" class="btn-icon danger" title="Delete Session">×</button>
                 </div>
             </div>
 
@@ -32,6 +35,7 @@
                     <button id="btnDummyImage" class="btn-ghost">Dummy Cam</button>
                     <input type="file" id="camFile" accept="image/*" style="display:none" />
                     <button id="btnUploadTestImage" class="btn-ghost">Upload Img</button>
+                    <button id="btnExportCSV" class="btn-ghost">Export CSV</button>
                 </div>
             </div>
 
@@ -129,6 +133,29 @@
                                 <button id="imgNext" disabled>&gt;</button>
                             </div>
                         </div>
+
+                        <!-- DATA TABLE (HIDDEN) -->
+                        <div class="data-table-box" style="display:none;">
+                            <div class="table-header">
+                                <h3>Sensor History</h3>
+                            </div>
+                            <div class="table-container">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Time</th>
+                                            <th>Temp (°C)</th>
+                                            <th>Moist (%)</th>
+                                            <th>Gas</th>
+                                            <th>pH</th>
+                                            <th>EC</th>
+                                            <th>Mat (%)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="sensorTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
                         <div id="imageHistory" class="history-thumbs"></div>
                     </div>
                 </div>
@@ -149,7 +176,8 @@
             query,
             orderByKey,
             limitToLast,
-            get
+            get,
+            remove
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 
         import {
@@ -204,173 +232,325 @@
         const db = getDatabase(app);
         const storage = getStorage(app);
 
-        const SESSION_ID = "session_001";
-        document.getElementById("session-id").textContent = SESSION_ID;
+        // Global State
+        let currentSessionId = "session_001";
+        let currentStatus = "stopped";
+        let thresholds = { ...DEFAULT_THRESHOLDS };
+        let lastLatest = null;
 
-        const latestRef = ref(db, `latest/${SESSION_ID}`);
-        const logsRef = ref(db, `sensor_logs/${SESSION_ID}`);
+        // Listener Unsubscribers
+        let unsubSession, unsubLatest, unsubThreshold, unsubImages;
+
+        // Firebase References (Dynamic)
+        let latestRef, logsRef, sessionRef, imagesRef, thresholdRef;
+
+        // DOM Elements
+        const sessionSelect = document.getElementById("sessionSelect");
+        const btnNewSession = document.getElementById("btnNewSession");
+        const btnDeleteSession = document.getElementById("btnDeleteSession");
         const currentCard = document.getElementById("currentCard");
         const tempAlertEl = document.getElementById("tempAlert");
-
-        const sessionRef = ref(db, `sessions/${SESSION_ID}`);
-        const imagesRef = ref(db, `images/${SESSION_ID}`);
-
-        const thresholdRef = ref(db, `sessions/${SESSION_ID}/threshold`);
-
-
-
         const statusEl = document.getElementById("sessionStatus");
         const btnStart = document.getElementById("btnStart");
         const btnStop = document.getElementById("btnStop");
         const btnDummy = document.getElementById("btnDummy");
-
         const btnDummyImage = document.getElementById("btnDummyImage");
         const imgEl = document.getElementById("compostImage");
         const imgTimeEl = document.getElementById("imgTimestamp");
         const imgPlaceholderEl = document.getElementById("imagePlaceholder");
         const imageHistoryEl = document.getElementById("imageHistory");
-
-        // pagination controls
         const imgPrevBtn = document.getElementById("imgPrev");
         const imgNextBtn = document.getElementById("imgNext");
         const imgPageLabel = document.getElementById("imgPageLabel");
 
-        // state history
-        let imageEntries = [];  // array [timestamp, info]
+        // state history for images
+        let imageEntries = [];
         let imagePage = 0;
         const IMAGE_PAGE_SIZE = 6;
 
-
-        let currentStatus = "stopped";
-        let thresholds = { ...DEFAULT_THRESHOLDS };
-        let lastLatest = null;
-
-        // buat chart
+        // Charts
         const tempChart = createTempChart(
             document.getElementById("tempChart").getContext("2d")
         );
-
         const moistChart = createMoistChart(
             document.getElementById("moistChart").getContext("2d")
         );
 
-        // ======= SESSION STATE LISTENER =======
-        onValue(sessionRef, async (snap) => {
-            let data = snap.val();
+        // Initialize Session Manager
+        initSessionManager();
 
-            // kalau belum ada dokumen session sama sekali, inisialisasi
-            if (!data) {
-                const now = Math.floor(Date.now() / 1000);
-                data = {
-                    status: "stopped",
-                    started_at: null,
-                    ended_at: now
-                };
-                await set(sessionRef, data);
+        async function initSessionManager() {
+            // Populate Session Dropdown
+            const allSessionsRef = ref(db, 'sessions');
+            const snap = await get(allSessionsRef);
+
+            sessionSelect.innerHTML = "";
+            let foundLegacy = false;
+
+            if (snap.exists()) {
+                const data = snap.val();
+                Object.keys(data).forEach(key => {
+                    const opt = document.createElement("option");
+                    opt.value = key;
+                    opt.textContent = key;
+                    sessionSelect.appendChild(opt);
+                    if (key === "session_001") foundLegacy = true;
+                });
             }
 
-            currentStatus = data.status || "stopped";
-            updateSessionUI();
-        });
-
-        // Ubah bagian threshold initialization
-        onValue(thresholdRef, async (snap) => {
-            let t = snap.val();
-
-            if (!t) {
-                await update(thresholdRef, DEFAULT_THRESHOLDS);
-                t = DEFAULT_THRESHOLDS;
+            // Fallback if empty or session_001 missing (create it)
+            if (sessionSelect.options.length === 0 || !foundLegacy) {
+                if (!foundLegacy) {
+                    const opt = document.createElement("option");
+                    opt.value = "session_001";
+                    opt.textContent = "session_001";
+                    sessionSelect.appendChild(opt);
+                }
             }
 
-            thresholds = { ...DEFAULT_THRESHOLDS, ...t };
+            // Set initial value
+            sessionSelect.value = currentSessionId;
+            loadSession(currentSessionId);
 
-            thTempMinEl.value = thresholds.temp_min;
-            thTempMaxEl.value = thresholds.temp_max;
-            thMoistMinEl.value = thresholds.moist_min;
-            thMoistMaxEl.value = thresholds.moist_max;
+            // Events
+            sessionSelect.addEventListener("change", (e) => {
+                loadSession(e.target.value);
+            });
 
-            applyTempAlert();
+            btnNewSession.addEventListener("click", () => {
+                const name = prompt("Enter new session name (alphanumeric, no spaces):", `Session_${Math.floor(Date.now() / 1000)}`);
+                if (name && name.trim() !== "") {
+                    // Sanitize key
+                    const cleanName = name.trim().replace(/[.#$/[\]\s]/g, "_");
+
+                    // Add to dropdown if not exists
+                    let exists = false;
+                    for (let i = 0; i < sessionSelect.options.length; i++) {
+                        if (sessionSelect.options[i].value === cleanName) exists = true;
+                    }
+
+                    if (!exists) {
+                        const opt = document.createElement("option");
+                        opt.value = cleanName;
+                        opt.textContent = cleanName;
+                        sessionSelect.appendChild(opt);
+                    }
+
+                    sessionSelect.value = cleanName;
+                    loadSession(cleanName);
+                }
+            });
+
+            btnDeleteSession.addEventListener("click", async () => {
+                const sid = currentSessionId;
+                if (!sid) return;
+
+                if (confirm(`Are you sure you want to DELETE sessions "${sid}" and all its data? This cannot be undone.`)) {
+                    try {
+                        // 1. Remove from all paths
+                        await remove(ref(db, `latest/${sid}`));
+                        await remove(ref(db, `sensor_logs/${sid}`));
+                        await remove(ref(db, `sessions/${sid}`)); // This removes metadata & thresholds
+                        await remove(ref(db, `images/${sid}`));
+
+                        alert(`Session "${sid}" deleted.`);
+
+                        // 2. Remove from dropdown
+                        let indexToRemove = -1;
+                        for (let i = 0; i < sessionSelect.options.length; i++) {
+                            if (sessionSelect.options[i].value === sid) {
+                                indexToRemove = i;
+                                break;
+                            }
+                        }
+                        if (indexToRemove !== -1) {
+                            sessionSelect.remove(indexToRemove);
+                        }
+
+                        // 3. Switch to another session
+                        if (sessionSelect.options.length > 0) {
+                            sessionSelect.selectedIndex = 0;
+                            loadSession(sessionSelect.value);
+                        } else {
+                            // If no sessions left, create default
+                            const opt = document.createElement("option");
+                            opt.value = "session_001";
+                            opt.textContent = "session_001";
+                            sessionSelect.appendChild(opt);
+                            sessionSelect.value = "session_001";
+                            loadSession("session_001");
+                        }
+
+                    } catch (err) {
+                        console.error("Delete failed", err);
+                        alert("Failed to delete session. See console.");
+                    }
+                }
+            });
+        }
+
+        function loadSession(sid) {
+            console.log("Switching to session:", sid);
+            currentSessionId = sid;
+
+            // Detach old listeners
+            if (unsubSession) unsubSession();
+            if (unsubThreshold) unsubThreshold();
+            if (unsubLatest) unsubLatest();
+            if (unsubImages) unsubImages();
+
+            // Clear UI
+            document.getElementById("temp").textContent = "-";
+            document.getElementById("moist").textContent = "-";
+            document.getElementById("gas").textContent = "-";
+            document.getElementById("ph").textContent = "-";
+            document.getElementById("ec").textContent = "-";
+            document.getElementById("maturity").textContent = "-";
+            document.getElementById("lastUpdate").textContent = "Waiting for data...";
+            imgEl.style.display = "none";
+            imgPlaceholderEl.style.display = "block";
+            imageHistoryEl.innerHTML = "";
+
+            // Re-define Refs
+            latestRef = ref(db, `latest/${sid}`);
+            logsRef = ref(db, `sensor_logs/${sid}`);
+            sessionRef = ref(db, `sessions/${sid}`);
+            imagesRef = ref(db, `images/${sid}`);
+            thresholdRef = ref(db, `sessions/${sid}/threshold`);
+
+            // Attach Listeners
+            subscribeToSession();
+
+            // Refresh Charts manually
             refreshChart();
-        });
+        }
 
+        function subscribeToSession() {
+            // 1. Session Status
+            unsubSession = onValue(sessionRef, async (snap) => {
+                let data = snap.val();
+                if (!data) {
+                    const now = Math.floor(Date.now() / 1000);
+                    data = { status: "stopped", started_at: null, ended_at: now };
+                    await set(sessionRef, data);
+                }
+                currentStatus = data.status || "stopped";
+                updateSessionUI();
+            });
 
+            // 2. Thresholds
+            unsubThreshold = onValue(thresholdRef, async (snap) => {
+                let t = snap.val();
+                if (!t) {
+                    await update(thresholdRef, DEFAULT_THRESHOLDS);
+                    t = DEFAULT_THRESHOLDS;
+                }
+                thresholds = { ...DEFAULT_THRESHOLDS, ...t };
 
+                // Update Inputs
+                thTempMinEl.value = thresholds.temp_min;
+                thTempMaxEl.value = thresholds.temp_max;
+                thMoistMinEl.value = thresholds.moist_min;
+                thMoistMaxEl.value = thresholds.moist_max;
+
+                applyTempAlert();
+                refreshChart();
+            });
+
+            // 3. Latest Sensor Data
+            unsubLatest = onValue(latestRef, (snap) => {
+                const d = snap.val();
+                if (!d) return;
+
+                lastLatest = d;
+
+                document.getElementById("temp").textContent = fmt(d.temperature, 1);
+                document.getElementById("moist").textContent = fmt(d.moisture, 0);
+                document.getElementById("gas").textContent = fmt(d.gas, 0);
+                document.getElementById("ph").textContent = fmt(d.ph, 2);
+                document.getElementById("ec").textContent = fmt(d.ec, 2);
+                document.getElementById("maturity").textContent = fmt(d.maturity, 0);
+
+                if (d.timestamp) {
+                    document.getElementById("lastUpdate").textContent =
+                        new Date(d.timestamp * 1000).toLocaleString();
+                }
+
+                applyTempAlert();
+                refreshChart();
+            });
+
+            // 4. Images
+            unsubImages = onValue(imagesRef, (snap) => {
+                const data = snap.val();
+                if (!data) {
+                    imgEl.style.display = "none";
+                    imgPlaceholderEl.style.display = "block";
+                    imgTimeEl.textContent = "-";
+                    imageHistoryEl.innerHTML = "";
+                    imageEntries = [];
+                    renderImageHistory();
+                    return;
+                }
+
+                const entries = Object.entries(data)
+                    .map(([k, v]) => [Number(k), v])
+                    .filter(([ts, v]) => v && v.url)
+                    .sort((a, b) => b[0] - a[0]);
+
+                imageEntries = entries;
+
+                // Latest Image
+                if (entries.length > 0) {
+                    const [latestTs, latestInfo] = entries[0];
+                    imgEl.src = latestInfo.url;
+                    imgEl.style.display = "block";
+                    imgPlaceholderEl.style.display = "none";
+                    const t = latestInfo.timestamp || latestTs;
+                    imgTimeEl.textContent = t ? new Date(t * 1000).toLocaleString() : "-";
+                } else {
+                    imgEl.style.display = "none";
+                    imgPlaceholderEl.style.display = "block";
+                }
+
+                imagePage = 0;
+                renderImageHistory();
+            });
+        }
 
         function updateSessionUI() {
             statusEl.textContent = currentStatus === "running" ? "Running" : "Stopped";
-
             statusEl.classList.remove("status-running", "status-stopped");
-            statusEl.classList.add(
-                currentStatus === "running" ? "status-running" : "status-stopped"
-            );
+            statusEl.classList.add(currentStatus === "running" ? "status-running" : "status-stopped");
 
-            if (currentStatus === "running") {
-                btnStart.disabled = true;
-                btnStop.disabled = false;
-            } else {
-                btnStart.disabled = false;
-                btnStop.disabled = true;
-            }
+            btnStart.disabled = (currentStatus === "running");
+            btnStop.disabled = (currentStatus !== "running");
         }
-
-        // ======= SENSOR LATEST LISTENER =======
-
-        onValue(latestRef, (snap) => {
-            const d = snap.val();
-            if (!d) return;
-
-            lastLatest = d; // simpan global
-
-            document.getElementById("temp").textContent = fmt(d.temperature, 1);
-            document.getElementById("moist").textContent = fmt(d.moisture, 0);
-            document.getElementById("gas").textContent = fmt(d.gas, 0);
-            document.getElementById("ph").textContent = fmt(d.ph, 2);
-            document.getElementById("ec").textContent = fmt(d.ec, 2);
-            document.getElementById("maturity").textContent = fmt(d.maturity, 0);
-
-            if (d.timestamp) {
-                document.getElementById("lastUpdate").textContent =
-                    new Date(d.timestamp * 1000).toLocaleString();
-            }
-
-            applyTempAlert();
-            refreshChart();
-        });
-
 
         function applyTempAlert() {
             if (!lastLatest) return;
-
             const tempVal = Number(lastLatest.temperature);
             const moistVal = Number(lastLatest.moisture);
-
             const { temp_min, temp_max, moist_min, moist_max } = thresholds;
             const tempAlertEl = document.getElementById("tempAlert");
             const moistAlertEl = document.getElementById("moistAlert");
 
-            // Temperature alert
             if (!isNaN(tempVal) && (tempVal < temp_min || tempVal > temp_max)) {
-                tempAlertEl.textContent =
-                    `⚠️ Temperature ${fmt(tempVal, 1)} °C outside range ` +
-                    `${temp_min}–${temp_max} °C.`;
+                tempAlertEl.textContent = `⚠️ Temperature ${fmt(tempVal, 1)} °C outside range ${temp_min}–${temp_max} °C.`;
                 tempAlertEl.style.display = "block";
                 tempAlertEl.style.color = "#ff4d4f";
             } else {
                 tempAlertEl.style.display = "none";
             }
 
-            // Moisture alert
             if (!isNaN(moistVal) && (moistVal < moist_min || moistVal > moist_max)) {
-                moistAlertEl.textContent =
-                    `⚠️ Moisture ${fmt(moistVal, 0)}% outside range ` +
-                    `${moist_min}–${moist_max}%.`;
+                moistAlertEl.textContent = `⚠️ Moisture ${fmt(moistVal, 0)}% outside range ${moist_min}–${moist_max}%.`;
                 moistAlertEl.style.display = "block";
                 moistAlertEl.style.color = "#ffa940";
             } else {
                 moistAlertEl.style.display = "none";
             }
 
-            // Tambah/remove class alert pada card
             if (currentCard) {
                 if ((tempAlertEl.style.display === "block") || (moistAlertEl.style.display === "block")) {
                     currentCard.classList.add("card-alert");
@@ -382,11 +562,8 @@
 
         function renderImageHistory() {
             if (!imageHistoryEl) return;
-
-            // Reset grid
             imageHistoryEl.innerHTML = "";
 
-            // Jika tidak ada gambar
             if (!imageEntries || imageEntries.length === 0) {
                 for (let i = 0; i < IMAGE_PAGE_SIZE; i++) {
                     const emptyDiv = document.createElement("div");
@@ -394,23 +571,13 @@
                     emptyDiv.textContent = "No Image";
                     imageHistoryEl.appendChild(emptyDiv);
                 }
-
                 if (imgPageLabel) imgPageLabel.textContent = "Page 0 / 0";
                 if (imgPrevBtn) imgPrevBtn.disabled = true;
                 if (imgNextBtn) imgNextBtn.disabled = true;
                 return;
             }
 
-            // Hitung pagination
             const totalPages = Math.ceil(imageEntries.length / IMAGE_PAGE_SIZE);
-            if (totalPages === 0) {
-                if (imgPageLabel) imgPageLabel.textContent = "Page 0 / 0";
-                if (imgPrevBtn) imgPrevBtn.disabled = true;
-                if (imgNextBtn) imgNextBtn.disabled = true;
-                return;
-            }
-
-            // Pastikan page valid
             if (imagePage >= totalPages) imagePage = totalPages - 1;
             if (imagePage < 0) imagePage = 0;
 
@@ -418,33 +585,22 @@
             const end = start + IMAGE_PAGE_SIZE;
             const pageItems = imageEntries.slice(start, end);
 
-            // Render gambar yang ada
             pageItems.forEach(([ts, item]) => {
                 if (!item || !item.url) return;
-
                 const t = item.timestamp || ts;
-                const timeStr = t
-                    ? new Date(t * 1000).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit'
-                    })
-                    : String(ts);
+                const timeStr = t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : String(ts);
 
                 const div = document.createElement("div");
                 div.className = "image-history-item";
 
-                // Kontainer gambar
                 const imgContainer = document.createElement("div");
                 imgContainer.className = "image-history-img-container";
-
                 const img = document.createElement("img");
                 img.src = item.url;
                 img.alt = `Compost ${timeStr}`;
-                img.loading = "lazy"; // Optimasi loading
-
+                img.loading = "lazy";
                 imgContainer.appendChild(img);
 
-                // Metadata
                 const meta = document.createElement("div");
                 meta.className = "image-history-meta";
                 meta.textContent = timeStr;
@@ -452,20 +608,16 @@
                 div.appendChild(imgContainer);
                 div.appendChild(meta);
 
-                // Klik untuk tampilkan sebagai gambar utama
                 div.addEventListener("click", () => {
                     imgEl.src = item.url;
                     imgEl.style.display = "block";
                     imgPlaceholderEl.style.display = "none";
-                    if (t) {
-                        imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
-                    }
+                    if (t) imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
                 });
 
                 imageHistoryEl.appendChild(div);
             });
 
-            // Tambah placeholder untuk sisa slot yang kosong
             const remainingSlots = IMAGE_PAGE_SIZE - pageItems.length;
             for (let i = 0; i < remainingSlots; i++) {
                 const emptyDiv = document.createElement("div");
@@ -474,122 +626,28 @@
                 imageHistoryEl.appendChild(emptyDiv);
             }
 
-            // Update UI pagination
-            if (imgPageLabel) {
-                imgPageLabel.textContent = `Page ${imagePage + 1} / ${totalPages}`;
-            }
+            if (imgPageLabel) imgPageLabel.textContent = `Page ${imagePage + 1} / ${totalPages}`;
             if (imgPrevBtn) imgPrevBtn.disabled = imagePage === 0;
             if (imgNextBtn) imgNextBtn.disabled = imagePage >= totalPages - 1;
         }
 
-        // ======= ESP32-CAM IMAGE LISTENER =======
-        onValue(imagesRef, (snap) => {
-            const data = snap.val();
-
-            if (!data) {
-                imgEl.style.display = "none";
-                imgPlaceholderEl.style.display = "block";
-                imgTimeEl.textContent = "-";
-                if (imageHistoryEl) imageHistoryEl.innerHTML = "";
-                return;
-            }
-
-            // sort semua entry berdasarkan timestamp (key)
-            const entries = Object.entries(data)
-                .map(([k, v]) => [Number(k), v])
-                .filter(([ts, v]) => v && v.url)
-                .sort((a, b) => b[0] - a[0]); // newest-first
-
-            imageEntries = entries;
-
-            // ========== LATEST ==========
-            const [latestTs, latestInfo] = entries[0];
-
-            imgEl.src = latestInfo.url;
-            imgEl.style.display = "block";
-            imgPlaceholderEl.style.display = "none";
-
-            const t = latestInfo.timestamp || latestTs;
-            imgTimeEl.textContent = t
-                ? new Date(t * 1000).toLocaleString()
-                : "-";
-
-            // reset ke halaman pertama tiap ada update baru
-            imagePage = 0;
-            renderImageHistory();
-
-            // ========== HISTORY (misal 6 terakhir) ==========
-            if (imageHistoryEl) {
-                const MAX_HISTORY = 6;
-                const latestEntries = entries.slice(-MAX_HISTORY).reverse(); // terbaru di depan
-
-                imageHistoryEl.innerHTML = "";
-
-                latestEntries.forEach(([key, item]) => {
-                    if (!item || !item.url) return;
-                    const t = item.timestamp || Number(key);
-                    const timeStr = t
-                        ? new Date(t * 1000).toLocaleTimeString()
-                        : key;
-
-                    const div = document.createElement("div");
-                    div.className = "image-history-item";
-                    div.innerHTML = `
-        <img src="${item.url}" alt="Compost ${timeStr}" />
-        <div class="image-history-meta">
-          ${timeStr}
-        </div>
-      `;
-
-                    // klik thumbnail -> jadikan sebagai gambar utama
-                    div.addEventListener("click", () => {
-                        imgEl.src = item.url;
-                        imgEl.style.display = "block";
-                        imgPlaceholderEl.style.display = "none";
-                        if (t) {
-                            imgTimeEl.textContent = new Date(t * 1000).toLocaleString();
-                        }
-                    });
-
-                    imageHistoryEl.appendChild(div);
-                });
-            }
+        if (imgPrevBtn) imgPrevBtn.addEventListener("click", () => {
+            if (imagePage > 0) { imagePage--; renderImageHistory(); }
+        });
+        if (imgNextBtn) imgNextBtn.addEventListener("click", () => {
+            const totalPages = Math.ceil(imageEntries.length / IMAGE_PAGE_SIZE);
+            if (imagePage < totalPages - 1) { imagePage++; renderImageHistory(); }
         });
 
-        if (imgPrevBtn) {
-            imgPrevBtn.addEventListener("click", () => {
-                if (imagePage > 0) {
-                    imagePage--;
-                    renderImageHistory();
-                }
-            });
-        }
-
-        if (imgNextBtn) {
-            imgNextBtn.addEventListener("click", () => {
-                const totalPages = Math.ceil(imageEntries.length / IMAGE_PAGE_SIZE);
-                if (imagePage < totalPages - 1) {
-                    imagePage++;
-                    renderImageHistory();
-                }
-            });
-        }
-
-
-
-
-
         // ======= BUTTON HANDLERS =======
-
-        // Start session
         btnStart.addEventListener("click", async () => {
             const now = Math.floor(Date.now() / 1000);
+            await update(sessionRef, { status: "running", started_at: now, ended_at: null });
+        });
 
-            await update(sessionRef, {
-                status: "running",
-                started_at: now,
-                ended_at: null
-            });
+        btnStop.addEventListener("click", async () => {
+            const now = Math.floor(Date.now() / 1000);
+            await update(sessionRef, { status: "stopped", ended_at: now });
         });
 
         btnSaveThreshold.addEventListener("click", async () => {
@@ -599,31 +657,13 @@
                 moist_min: Number(thMoistMinEl.value),
                 moist_max: Number(thMoistMaxEl.value)
             };
-
             await update(thresholdRef, t);
-            alert("Threshold updated.");
+            alert("Threshold updated for " + currentSessionId);
         });
 
-
-        // Stop session
-        btnStop.addEventListener("click", async () => {
-            const now = Math.floor(Date.now() / 1000);
-
-            await update(sessionRef, {
-                status: "stopped",
-                ended_at: now
-            });
-        });
-
-        // Generate Dummy Data – hanya kalau running
         btnDummy.addEventListener("click", async () => {
-            if (currentStatus !== "running") {
-                alert("Session belum running. Tekan Start dulu.");
-                return;
-            }
-
+            if (currentStatus !== "running") { alert("Session belum running. Tekan Start dulu."); return; }
             const t = Math.floor(Date.now() / 1000);
-
             const data = {
                 timestamp: t,
                 temperature: 55 + Math.random() * 15,
@@ -633,77 +673,45 @@
                 ec: 2 + (Math.random() * 0.5 - 0.25),
                 maturity: 60 + Math.round(Math.random() * 20)
             };
-
-            await set(ref(db, `sensor_logs/${SESSION_ID}/${t}`), data);
+            await set(ref(db, `sensor_logs/${currentSessionId}/${t}`), data);
             await set(latestRef, data);
         });
 
-
-
-        // Dummy Image – simulasi ESP32-CAM (hanya ketika running)
         btnDummyImage.addEventListener("click", async () => {
-            if (currentStatus !== "running") {
-                alert("Session belum running. Tekan Start dulu.");
-                return;
-            }
-
+            if (currentStatus !== "running") { alert("Session belum running. Tekan Start dulu."); return; }
             const t = Math.floor(Date.now() / 1000);
-            // Dummy URL pakai picsum (hanya buat testing)
             const url = `https://picsum.photos/seed/${t}/640/360`;
-
-            await set(ref(db, `images/${SESSION_ID}/${t}`), {
-                url,
-                timestamp: t
-            });
+            await set(ref(db, `images/${currentSessionId}/${t}`), { url, timestamp: t });
         });
 
-        // Klik tombol -> buka file picker
-        btnUploadTestImage.addEventListener("click", () => {
-            fileInputCam.click();
-        });
+        btnUploadTestImage.addEventListener("click", () => { fileInputCam.click(); });
 
-        // Saat file dipilih -> upload ke Storage + simpan URL ke RTDB
         fileInputCam.addEventListener("change", async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-
             if (currentStatus !== "running") {
                 alert("Session belum running. Tekan Start dulu.");
                 fileInputCam.value = "";
                 return;
             }
-
             try {
                 const t = Math.floor(Date.now() / 1000);
-                const path = `images/${SESSION_ID}/${t}_${file.name}`;
-
-                // 1) Upload ke Firebase Storage
+                const path = `images/${currentSessionId}/${t}_${file.name}`;
                 const sRef = storageRef(storage, path);
                 await uploadBytes(sRef, file);
-
-                // 2) Ambil download URL
                 const url = await getDownloadURL(sRef);
-
-                // 3) Tulis metadata ke RTDB
-                await set(ref(db, `images/${SESSION_ID}/${t}`), {
-                    url,
-                    timestamp: t
-                });
-
+                await set(ref(db, `images/${currentSessionId}/${t}`), { url, timestamp: t });
                 fileInputCam.value = "";
-                console.log("Uploaded test image:", url);
             } catch (err) {
                 console.error("Upload error:", err);
-                alert("Gagal upload gambar, lihat console.");
+                alert("Gagal upload gambar.");
             }
         });
 
-
-
-        // ======= CHART REFRESH =======
-        // Di bagian script index.html, ubah fungsi refreshChart:
         async function refreshChart() {
-            const q = query(logsRef, orderByKey(), limitToLast(20));
+            if (!logsRef) return;
+            // Fetch more logs for table
+            const q = query(logsRef, orderByKey(), limitToLast(50));
             const snap = await get(q);
 
             const tMin = thresholds.temp_min ?? null;
@@ -714,23 +722,78 @@
             if (!snap.exists()) {
                 updateTempChart(tempChart, [], [], tMin, tMax);
                 updateMoistChart(moistChart, [], [], mMin, mMax);
+                renderTable([]);
                 return;
             }
 
-            const labels = [];
-            const temps = [];
-            const moistures = [];
+            const chartLimit = 20; // Only show last 20 on chart
 
+            const allData = [];
             snap.forEach((child) => {
+                const k = child.key;
                 const v = child.val();
-                labels.push(new Date(child.key * 1000).toLocaleTimeString());
-                temps.push(v.temperature);
-                moistures.push(v.moisture);
+                allData.push({ k, ...v });
             });
+
+            // Update Chart (Last 20)
+            const chartData = allData.slice(-chartLimit);
+            const labels = chartData.map(d => new Date(d.k * 1000).toLocaleTimeString());
+            const temps = chartData.map(d => d.temperature);
+            const moistures = chartData.map(d => d.moisture);
 
             updateTempChart(tempChart, labels, temps, tMin, tMax);
             updateMoistChart(moistChart, labels, moistures, mMin, mMax);
+
+            // Update Table (All 50, reversed for newest first)
+            renderTable([...allData].reverse());
         }
+
+        const sensorTableBody = document.getElementById("sensorTableBody");
+        function renderTable(dataList) {
+            sensorTableBody.innerHTML = "";
+            dataList.forEach(d => {
+                const tr = document.createElement("tr");
+                const timeStr = new Date(d.k * 1000).toLocaleString();
+
+                tr.innerHTML = `
+                    <td class="cell-time">${timeStr}</td>
+                    <td>${fmt(d.temperature, 1)}</td>
+                    <td>${fmt(d.moisture, 0)}</td>
+                    <td>${fmt(d.gas, 0)}</td>
+                    <td>${fmt(d.ph, 2)}</td>
+                    <td>${fmt(d.ec, 2)}</td>
+                    <td>${fmt(d.maturity, 0)}</td>
+                `;
+                sensorTableBody.appendChild(tr);
+            });
+        }
+
+        const btnExportCSV = document.getElementById("btnExportCSV");
+        btnExportCSV.addEventListener("click", async () => {
+            if (!logsRef) return;
+            // Download all data for session (not just last 50)
+            const snap = await get(query(logsRef, orderByKey()));
+            if (!snap.exists()) {
+                alert("No data to export.");
+                return;
+            }
+
+            let csv = "Timestamp,Date,Time,Temperature,Moisture,Gas,pH,EC,Maturity\n";
+            snap.forEach(child => {
+                const v = child.val();
+                const ts = child.key * 1000;
+                const d = new Date(ts);
+                csv += `${ts},${d.toLocaleDateString()},${d.toLocaleTimeString()},${v.temperature},${v.moisture},${v.gas},${v.ph},${v.ec},${v.maturity}\n`;
+            });
+
+            const blob = new Blob([csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `kompos_session_${currentSessionId}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
 
 
 
