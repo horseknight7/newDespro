@@ -40,6 +40,19 @@
             </div>
 
             <div class="sidebar-section">
+                <h3>Notifications</h3>
+                <div class="form-group">
+                    <label>WhatsApp Number (62...)</label>
+                    <input id="waNumber" type="text" placeholder="628..."
+                        style="width: 100%; padding: 5px; margin-bottom: 5px;" />
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="waEnabled" />
+                    <label for="waEnabled" style="cursor: pointer;">Enable WA Alerts</label>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
                 <h3>Thresholds</h3>
                 <div class="threshold-form">
                     <div class="form-group">
@@ -76,23 +89,21 @@
                         <span class="value" id="moist">-</span>
                         <span class="unit">%</span>
                     </div>
+                    <!-- Reuse/Rename slots for new data -->
                     <div class="sensor-pill">
-                        <span class="label">Gas</span>
-                        <span class="value" id="gas">-</span>
+                        <span class="label">Methane</span>
+                        <span class="value" id="methane">-</span>
                     </div>
                     <div class="sensor-pill">
-                        <span class="label">pH</span>
-                        <span class="value" id="ph">-</span>
+                        <span class="label">CO2</span>
+                        <span class="value" id="co2">-</span>
                     </div>
                     <div class="sensor-pill">
-                        <span class="label">EC</span>
-                        <span class="value" id="ec">-</span>
-                    </div>
-                    <div class="sensor-pill">
-                        <span class="label">Mat</span>
-                        <span class="value" id="maturity">-</span>
+                        <span class="label">Humidity</span>
+                        <span class="value" id="humidity">-</span>
                         <span class="unit">%</span>
                     </div>
+                    <!-- Removed Mat/Maturity as it is not in the new sensor list -->
                 </div>
                 <div class="meta-info">
                     <span id="lastUpdate">Waiting for data...</span>
@@ -237,6 +248,8 @@
         let currentStatus = "stopped";
         let thresholds = { ...DEFAULT_THRESHOLDS };
         let lastLatest = null;
+        let lastWaSent = 0; // Timestamp for WA cooldown
+        let waNumber = "";
 
         // Listener Unsubscribers
         let unsubSession, unsubLatest, unsubThreshold, unsubImages;
@@ -402,17 +415,17 @@
             // Clear UI
             document.getElementById("temp").textContent = "-";
             document.getElementById("moist").textContent = "-";
-            document.getElementById("gas").textContent = "-";
-            document.getElementById("ph").textContent = "-";
-            document.getElementById("ec").textContent = "-";
-            document.getElementById("maturity").textContent = "-";
+            document.getElementById("methane").textContent = "-";
+            document.getElementById("co2").textContent = "-";
+            document.getElementById("humidity").textContent = "-";
+            // document.getElementById("maturity").textContent = "-";
             document.getElementById("lastUpdate").textContent = "Waiting for data...";
             imgEl.style.display = "none";
             imgPlaceholderEl.style.display = "block";
             imageHistoryEl.innerHTML = "";
 
             // Re-define Refs
-            latestRef = ref(db, `latest/${sid}`);
+            latestRef = ref(db, `latest`);
             logsRef = ref(db, `sensor_logs/${sid}`);
             sessionRef = ref(db, `sessions/${sid}`);
             imagesRef = ref(db, `images/${sid}`);
@@ -453,31 +466,70 @@
                 thMoistMinEl.value = thresholds.moist_min;
                 thMoistMaxEl.value = thresholds.moist_max;
 
+                if (thresholds.wa_number) document.getElementById("waNumber").value = thresholds.wa_number;
+                if (thresholds.wa_enabled !== undefined) document.getElementById("waEnabled").checked = thresholds.wa_enabled;
+
                 applyTempAlert();
                 refreshChart();
             });
 
             // 3. Latest Sensor Data
+            // 3. Latest Sensor Data (NEW AVG LOGIC)
             unsubLatest = onValue(latestRef, (snap) => {
                 const d = snap.val();
                 if (!d) return;
 
-                lastLatest = d;
+                // d should be { sensor1: {...}, sensor2: {...}, sensor3: {...}, ... }
+                // Calculate averages
+                let sumTemp = 0, sumMoist = 0, sumMethane = 0, sumCO2 = 0, sumHum = 0;
+                let count = 0;
+                let latestTs = 0;
 
-                document.getElementById("temp").textContent = fmt(d.temperature, 1);
-                document.getElementById("moist").textContent = fmt(d.moisture, 0);
-                document.getElementById("gas").textContent = fmt(d.gas, 0);
-                document.getElementById("ph").textContent = fmt(d.ph, 2);
-                document.getElementById("ec").textContent = fmt(d.ec, 2);
-                document.getElementById("maturity").textContent = fmt(d.maturity, 0);
+                // Iterate over keys that start with "sensor"
+                Object.keys(d).forEach(k => {
+                    if (k.startsWith("sensor")) {
+                        const s = d[k];
+                        if (s) {
+                            count++;
+                            sumTemp += Number(s.temperature || 0);
+                            sumMoist += Number(s.moisture || 0);
+                            sumMethane += Number(s.methane || 0);
+                            sumCO2 += Number(s.co2 || 0);
+                            sumHum += Number(s.humidity || 0);
+                            // Track latest timestamp
+                            if (s.timestamp && s.timestamp > latestTs) latestTs = s.timestamp;
+                        }
+                    }
+                });
 
-                if (d.timestamp) {
-                    document.getElementById("lastUpdate").textContent =
-                        new Date(d.timestamp * 1000).toLocaleString();
+                if (count > 0) {
+                    const avgTemp = sumTemp / count;
+                    const avgMoist = sumMoist / count;
+                    const avgMethane = sumMethane / count;
+                    const avgCO2 = sumCO2 / count;
+                    const avgHum = sumHum / count;
+
+                    lastLatest = {
+                        temperature: avgTemp,
+                        moisture: avgMoist,
+                        timestamp: latestTs
+                    };
+
+                    document.getElementById("temp").textContent = fmt(avgTemp, 1);
+                    document.getElementById("moist").textContent = fmt(avgMoist, 0);
+                    document.getElementById("methane").textContent = fmt(avgMethane, 0);
+                    document.getElementById("co2").textContent = fmt(avgCO2, 0);
+                    document.getElementById("humidity").textContent = fmt(avgHum, 0);
+                    // document.getElementById("maturity").textContent = "-"; // specific maturity not in new list
+
+                    if (latestTs) {
+                        document.getElementById("lastUpdate").textContent =
+                            new Date(latestTs * 1000).toLocaleString();
+                    }
                 }
 
                 applyTempAlert();
-                refreshChart();
+                refreshChart(); // Update chart with logs if available
             });
 
             // 4. Images
@@ -554,8 +606,43 @@
             if (currentCard) {
                 if ((tempAlertEl.style.display === "block") || (moistAlertEl.style.display === "block")) {
                     currentCard.classList.add("card-alert");
+
+                    // Check WA Alert
+                    const activeAlerts = [];
+                    if (tempAlertEl.style.display === "block") activeAlerts.push(tempAlertEl.textContent);
+                    if (moistAlertEl.style.display === "block") activeAlerts.push(moistAlertEl.textContent);
+
+                    checkAndSendWA(activeAlerts.join("\n"));
                 } else {
                     currentCard.classList.remove("card-alert");
+                }
+            }
+        }
+
+        function checkAndSendWA(message) {
+            const enabled = document.getElementById("waEnabled").checked;
+            const number = document.getElementById("waNumber").value;
+            const now = Math.floor(Date.now() / 1000);
+            const cooldown = 300; // 5 minutes
+
+            if (!enabled || !number || message.length === 0) return;
+
+            if (now - lastWaSent > cooldown) {
+                console.log("Sending WA Alert:", message);
+                lastWaSent = now;
+
+                // Format message
+                const text = `*KOMPOS ALERT*\n${message}\nTime: ${new Date().toLocaleString()}`;
+                const url = `https://wa.me/${number}?text=${encodeURIComponent(text)}`;
+
+                // Try to open window
+                const win = window.open(url, '_blank');
+                if (win) {
+                    // Success
+                } else {
+                    // Blocked
+                    console.warn("WA Popup blocked");
+                    // alert("WA Alert blocked by browser. Please allow popups.");
                 }
             }
         }
@@ -641,8 +728,19 @@
 
         // ======= BUTTON HANDLERS =======
         btnStart.addEventListener("click", async () => {
-            const now = Math.floor(Date.now() / 1000);
-            await update(sessionRef, { status: "running", started_at: now, ended_at: null });
+            console.log("Btn Start Clicked");
+            try {
+                if (!sessionRef) {
+                    throw new Error("Session Ref is missing");
+                }
+                const now = Math.floor(Date.now() / 1000);
+                console.log("Updating session status to running...");
+                await update(sessionRef, { status: "running", started_at: now, ended_at: null });
+                console.log("Session status updated.");
+            } catch (err) {
+                console.error("Start Error:", err);
+                alert("Error starting session: " + err.message);
+            }
         });
 
         btnStop.addEventListener("click", async () => {
@@ -655,26 +753,61 @@
                 temp_min: Number(thTempMinEl.value),
                 temp_max: Number(thTempMaxEl.value),
                 moist_min: Number(thMoistMinEl.value),
-                moist_max: Number(thMoistMaxEl.value)
+                moist_max: Number(thMoistMaxEl.value),
+                wa_number: document.getElementById("waNumber").value,
+                wa_enabled: document.getElementById("waEnabled").checked
             };
             await update(thresholdRef, t);
-            alert("Threshold updated for " + currentSessionId);
+            alert("Settings updated for " + currentSessionId);
         });
 
         btnDummy.addEventListener("click", async () => {
             if (currentStatus !== "running") { alert("Session belum running. Tekan Start dulu."); return; }
             const t = Math.floor(Date.now() / 1000);
-            const data = {
+
+            // Generate dummy 3 sensors
+            const sensors = {};
+            let sumTemp = 0, sumMoist = 0, sumMethane = 0, sumCO2 = 0, sumHum = 0;
+            const count = 3;
+
+            for (let i = 1; i <= count; i++) {
+                const temp = 55 + Math.random() * 15;
+                const moist = 40 + Math.round(Math.random() * 20);
+                const meth = 10 + Math.round(Math.random() * 20);
+                const co2 = 400 + Math.round(Math.random() * 100);
+                const hum = 60 + Math.round(Math.random() * 20);
+
+                sumTemp += temp;
+                sumMoist += moist;
+                sumMethane += meth;
+                sumCO2 += co2;
+                sumHum += hum;
+
+                sensors[`sensor${i}`] = {
+                    timestamp: t,
+                    temperature: temp,
+                    moisture: moist,
+                    methane: meth,
+                    co2: co2,
+                    humidity: hum
+                };
+            }
+
+            // Write to latest (root)
+            await set(latestRef, sensors);
+
+            // Calculate averages for LOGS so Chart/Table updates
+            const avgData = {
                 timestamp: t,
-                temperature: 55 + Math.random() * 15,
-                moisture: 40 + Math.round(Math.random() * 20),
-                gas: 100 + Math.round(Math.random() * 80),
-                ph: 7 + (Math.random() * 0.6 - 0.3),
-                ec: 2 + (Math.random() * 0.5 - 0.25),
-                maturity: 60 + Math.round(Math.random() * 20)
+                temperature: sumTemp / count,
+                moisture: sumMoist / count,
+                methane: sumMethane / count,
+                co2: sumCO2 / count,
+                humidity: sumHum / count
+                // maturity removed
             };
-            await set(ref(db, `sensor_logs/${currentSessionId}/${t}`), data);
-            await set(latestRef, data);
+
+            await set(ref(db, `sensor_logs/${currentSessionId}/${t}`), avgData);
         });
 
         btnDummyImage.addEventListener("click", async () => {
