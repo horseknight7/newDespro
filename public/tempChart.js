@@ -19,7 +19,9 @@ export function createTempChart(ctx) {
           pointBorderWidth: 2,
           tension: 0.3,
           borderWidth: 3,
-          fill: false
+          borderWidth: 3,
+          fill: false,
+          spanGaps: true // FIX: Connect lines even if gaps exist
         },
         {
           label: "Max Threshold",
@@ -51,20 +53,20 @@ export function createTempChart(ctx) {
       animation: false,
       scales: {
         x: {
-          ticks: { 
+          ticks: {
             color: "#b0b0c0",
             font: {
               size: 12,
               weight: '500'
             }
           },
-          grid: { 
+          grid: {
             color: "rgba(255,255,255,0.08)",
             drawBorder: false
           },
-          title: { 
-            display: true, 
-            text: "Time", 
+          title: {
+            display: true,
+            text: "Time",
             color: "#f8f8f8",
             font: {
               size: 14,
@@ -74,22 +76,22 @@ export function createTempChart(ctx) {
           }
         },
         y: {
-          min: 40,
-          max: 80,
-          ticks: { 
+          // min: 40,  <-- REMOVED to allow auto-scale
+          // max: 80,  <-- REMOVED to allow auto-scale
+          ticks: {
             color: "#b0b0c0",
             font: {
               size: 12,
               weight: '500'
             }
           },
-          grid: { 
+          grid: {
             color: "rgba(255,255,255,0.08)",
             drawBorder: false
           },
-          title: { 
-            display: true, 
-            text: "Temperature (°C)", 
+          title: {
+            display: true,
+            text: "Temperature (°C)",
             color: "#f8f8f8",
             font: {
               size: 14,
@@ -147,7 +149,9 @@ export function createMoistChart(ctx) {
           pointBorderWidth: 2,
           tension: 0.3,
           borderWidth: 3,
-          fill: false
+          borderWidth: 3,
+          fill: false,
+          spanGaps: true // FIX: Connect lines even if gaps exist
         },
         {
           label: "Max Threshold",
@@ -179,20 +183,20 @@ export function createMoistChart(ctx) {
       animation: false,
       scales: {
         x: {
-          ticks: { 
+          ticks: {
             color: "#b0b0c0",
             font: {
               size: 12,
               weight: '500'
             }
           },
-          grid: { 
+          grid: {
             color: "rgba(255,255,255,0.08)",
             drawBorder: false
           },
-          title: { 
-            display: true, 
-            text: "Time", 
+          title: {
+            display: true,
+            text: "Time",
             color: "#f8f8f8",
             font: {
               size: 14,
@@ -202,22 +206,22 @@ export function createMoistChart(ctx) {
           }
         },
         y: {
-          min: 20,
-          max: 80,
-          ticks: { 
+          // min: 20, <-- REMOVED
+          // max: 80, <-- REMOVED
+          ticks: {
             color: "#b0b0c0",
             font: {
               size: 12,
               weight: '500'
             }
           },
-          grid: { 
+          grid: {
             color: "rgba(255,255,255,0.08)",
             drawBorder: false
           },
-          title: { 
-            display: true, 
-            text: "Moisture (%)", 
+          title: {
+            display: true,
+            text: "Moisture (%)",
             color: "#f8f8f8",
             font: {
               size: 14,

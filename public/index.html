@@ -16,7 +16,7 @@
                 <h1>Kompos<br>Dashboard</h1>
                 <div class="session-control">
                     <select id="sessionSelect" class="session-select">
-                        <option value="session_001" selected>session_001</option>
+                        <option value="" disabled selected>Select Session</option>
                     </select>
                     <button id="btnNewSession" class="btn-icon" title="New Session">+</button>
                     <button id="btnDeleteSession" class="btn-icon danger" title="Delete Session">×</button>
@@ -31,14 +31,15 @@
                 <div class="control-grid">
                     <button id="btnStart" class="btn-primary">Start</button>
                     <button id="btnStop" class="btn-secondary" disabled>Stop</button>
-                    <button id="btnDummy" class="btn-ghost">Dummy Data</button>
-                    <button id="btnDummyImage" class="btn-ghost">Dummy Cam</button>
+                    <button id="btnDummy" class="btn-ghost" style="display:none">Dummy Data</button>
+                    <button id="btnDummyImage" class="btn-ghost" style="display:none">Dummy Cam</button>
                     <input type="file" id="camFile" accept="image/*" style="display:none" />
-                    <button id="btnUploadTestImage" class="btn-ghost">Upload Img</button>
-                    <button id="btnExportCSV" class="btn-ghost">Export CSV</button>
+                    <button id="btnUploadTestImage" class="btn-ghost" style="display:none">Upload Img</button>
+                    <button id="btnExportCSV" class="btn-ghost" style="display:none">Export CSV</button>
                 </div>
             </div>
 
+            <!-- WA Notification (Hidden)
             <div class="sidebar-section">
                 <h3>Notifications</h3>
                 <div class="form-group">
@@ -51,6 +52,7 @@
                     <label for="waEnabled" style="cursor: pointer;">Enable WA Alerts</label>
                 </div>
             </div>
+            -->
 
             <div class="sidebar-section">
                 <h3>Thresholds</h3>
@@ -109,8 +111,10 @@
                     <span id="lastUpdate">Waiting for data...</span>
                 </div>
                 <!-- Alerts Container -->
-                <div id="tempAlert" class="alert-toast" style="display:none"></div>
-                <div id="moistAlert" class="alert-toast" style="display:none"></div>
+                <div class="alert-container">
+                    <div id="tempAlert" class="alert-toast" style="display:none"></div>
+                    <div id="moistAlert" class="alert-toast" style="display:none"></div>
+                </div>
             </header>
 
             <!-- DASHBOARD GRID -->
@@ -195,7 +199,8 @@
             getStorage,
             ref as storageRef,
             uploadBytes,
-            getDownloadURL
+            getDownloadURL,
+            listAll
         } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
 
@@ -253,6 +258,7 @@
 
         // Listener Unsubscribers
         let unsubSession, unsubLatest, unsubThreshold, unsubImages;
+        let pollInterval = null;
 
         // Firebase References (Dynamic)
         let latestRef, logsRef, sessionRef, imagesRef, thresholdRef;
@@ -276,6 +282,12 @@
         const imgNextBtn = document.getElementById("imgNext");
         const imgPageLabel = document.getElementById("imgPageLabel");
 
+        // Fix: Handle broken images globally (Empty the feed if broken)
+        imgEl.onerror = function () {
+            this.style.display = "none";
+            imgPlaceholderEl.style.display = "block";
+        };
+
         // state history for images
         let imageEntries = [];
         let imagePage = 0;
@@ -298,6 +310,15 @@
             const snap = await get(allSessionsRef);
 
             sessionSelect.innerHTML = "";
+
+            // 1. Add Default Placeholder
+            const defaultOpt = document.createElement("option");
+            defaultOpt.value = "";
+            defaultOpt.textContent = "Select Session";
+            defaultOpt.disabled = true;
+            defaultOpt.selected = true;
+            sessionSelect.appendChild(defaultOpt);
+
             let foundLegacy = false;
 
             if (snap.exists()) {
@@ -311,19 +332,12 @@
                 });
             }
 
-            // Fallback if empty or session_001 missing (create it)
-            if (sessionSelect.options.length === 0 || !foundLegacy) {
-                if (!foundLegacy) {
-                    const opt = document.createElement("option");
-                    opt.value = "session_001";
-                    opt.textContent = "session_001";
-                    sessionSelect.appendChild(opt);
-                }
-            }
+            // Fallback if empty - do nothing (User request: "biarkan awalnya kosong")
+            // if (sessionSelect.options.length === 0 || !foundLegacy) { ... }
 
-            // Set initial value
-            sessionSelect.value = currentSessionId;
-            loadSession(currentSessionId);
+            // Set initial value only if sessions exist
+            // Do not auto-select. Force user to choose or create.
+            loadSession(null);
 
             // Events
             sessionSelect.addEventListener("change", (e) => {
@@ -406,11 +420,27 @@
             console.log("Switching to session:", sid);
             currentSessionId = sid;
 
+            if (!sid) {
+                // Reset UI to empty state
+                if (pollInterval) clearInterval(pollInterval);
+                document.getElementById("temp").textContent = "-";
+                document.getElementById("moist").textContent = "-";
+                document.getElementById("lastUpdate").textContent = "Select a session";
+                imgEl.style.display = "none";
+                imgPlaceholderEl.style.display = "block";
+                imageHistoryEl.innerHTML = "";
+                renderTable([]);
+                updateTempChart(tempChart, [], [], null, null);
+                updateMoistChart(moistChart, [], [], null, null);
+                return;
+            }
+
             // Detach old listeners
             if (unsubSession) unsubSession();
             if (unsubThreshold) unsubThreshold();
             if (unsubLatest) unsubLatest();
             if (unsubImages) unsubImages();
+            if (pollInterval) clearInterval(pollInterval);
 
             // Clear UI
             document.getElementById("temp").textContent = "-";
@@ -425,7 +455,7 @@
             imageHistoryEl.innerHTML = "";
 
             // Re-define Refs
-            latestRef = ref(db, `latest`);
+            latestRef = ref(db, `latest/${sid}`);
             logsRef = ref(db, `sensor_logs/${sid}`);
             sessionRef = ref(db, `sessions/${sid}`);
             imagesRef = ref(db, `images/${sid}`);
@@ -436,6 +466,9 @@
 
             // Refresh Charts manually
             refreshChart();
+
+            // Fetch initial data (sync history even if stopped)
+            fetchLatestData();
         }
 
         function subscribeToSession() {
@@ -449,6 +482,22 @@
                 }
                 currentStatus = data.status || "stopped";
                 updateSessionUI();
+
+                // CONTROL POLLING BASED ON STATUS
+                // "jika diisi nama session dan ditekan tombol start baru kita mulai retrieve datanya"
+                if (currentStatus === "running") {
+                    if (!pollInterval) {
+                        console.log("Starting Polling...");
+                        fetchLatestData();
+                        pollInterval = setInterval(fetchLatestData, 10000);
+                    }
+                } else {
+                    if (pollInterval) {
+                        console.log("Stopping Polling...");
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                }
             });
 
             // 2. Thresholds
@@ -466,71 +515,21 @@
                 thMoistMinEl.value = thresholds.moist_min;
                 thMoistMaxEl.value = thresholds.moist_max;
 
-                if (thresholds.wa_number) document.getElementById("waNumber").value = thresholds.wa_number;
-                if (thresholds.wa_enabled !== undefined) document.getElementById("waEnabled").checked = thresholds.wa_enabled;
+                const waNumEl = document.getElementById("waNumber");
+                if (waNumEl && thresholds.wa_number) waNumEl.value = thresholds.wa_number;
+
+                const waEnEl = document.getElementById("waEnabled");
+                if (waEnEl && thresholds.wa_enabled !== undefined) waEnEl.checked = thresholds.wa_enabled;
 
                 applyTempAlert();
                 refreshChart();
             });
 
             // 3. Latest Sensor Data
-            // 3. Latest Sensor Data (NEW AVG LOGIC)
-            unsubLatest = onValue(latestRef, (snap) => {
-                const d = snap.val();
-                if (!d) return;
-
-                // d should be { sensor1: {...}, sensor2: {...}, sensor3: {...}, ... }
-                // Calculate averages
-                let sumTemp = 0, sumMoist = 0, sumMethane = 0, sumCO2 = 0, sumHum = 0;
-                let count = 0;
-                let latestTs = 0;
-
-                // Iterate over keys that start with "sensor"
-                Object.keys(d).forEach(k => {
-                    if (k.startsWith("sensor")) {
-                        const s = d[k];
-                        if (s) {
-                            count++;
-                            sumTemp += Number(s.temperature || 0);
-                            sumMoist += Number(s.moisture || 0);
-                            sumMethane += Number(s.methane || 0);
-                            sumCO2 += Number(s.co2 || 0);
-                            sumHum += Number(s.humidity || 0);
-                            // Track latest timestamp
-                            if (s.timestamp && s.timestamp > latestTs) latestTs = s.timestamp;
-                        }
-                    }
-                });
-
-                if (count > 0) {
-                    const avgTemp = sumTemp / count;
-                    const avgMoist = sumMoist / count;
-                    const avgMethane = sumMethane / count;
-                    const avgCO2 = sumCO2 / count;
-                    const avgHum = sumHum / count;
-
-                    lastLatest = {
-                        temperature: avgTemp,
-                        moisture: avgMoist,
-                        timestamp: latestTs
-                    };
-
-                    document.getElementById("temp").textContent = fmt(avgTemp, 1);
-                    document.getElementById("moist").textContent = fmt(avgMoist, 0);
-                    document.getElementById("methane").textContent = fmt(avgMethane, 0);
-                    document.getElementById("co2").textContent = fmt(avgCO2, 0);
-                    document.getElementById("humidity").textContent = fmt(avgHum, 0);
-                    // document.getElementById("maturity").textContent = "-"; // specific maturity not in new list
-
-                    if (latestTs) {
-                        document.getElementById("lastUpdate").textContent =
-                            new Date(latestTs * 1000).toLocaleString();
-                    }
-                }
-
-                applyTempAlert();
-                refreshChart(); // Update chart with logs if available
-            });
+            // 3. Polling Data & Image (Every 10s)
+            // MOVED TO INSIDE unsubSession (Status Listener) to sync with Start/Stop
+            // fetchLatestData();
+            // pollInterval = setInterval(fetchLatestData, 10000);
 
             // 4. Images
             unsubImages = onValue(imagesRef, (snap) => {
@@ -570,14 +569,183 @@
             });
         }
 
-        function updateSessionUI() {
-            statusEl.textContent = currentStatus === "running" ? "Running" : "Stopped";
-            statusEl.classList.remove("status-running", "status-stopped");
-            statusEl.classList.add(currentStatus === "running" ? "status-running" : "status-stopped");
+        async function fetchLatestData() {
+            // A. Fetch Sensors
+            try {
+                const snap = await get(latestRef);
+                const d = snap.val();
+                if (d) {
+                    // d structure: { sensor1: {...}, sensor2: {...}, timestamp: ... }
+                    let sumTemp = 0, sumMoist = 0, sumMethane = 0, sumCO2 = 0, sumHum = 0;
+                    let count = 0;
+                    let latestTs = 0;
 
-            btnStart.disabled = (currentStatus === "running");
-            btnStop.disabled = (currentStatus !== "running");
+                    Object.keys(d).forEach(k => {
+                        if (k.startsWith("sensor")) {
+                            const s = d[k];
+                            // Check if s is object (has temp etc)
+                            if (s && typeof s === 'object') {
+                                count++;
+                                sumTemp += Number(s.temperature || 0);
+                                sumMoist += Number(s.moisture || 0);
+                                sumMethane += Number(s.methane || 0);
+                                sumCO2 += Number(s.co2 || 0);
+                                sumHum += Number(s.humidity || 0);
+                                if (s.timestamp && s.timestamp > latestTs) latestTs = s.timestamp;
+                            }
+                        } else if (k === "timestamp") {
+                            // Root timestamp in session node (as per screenshot)
+                            if (d[k] > latestTs) latestTs = d[k];
+                        }
+                    });
+
+                    if (count > 0) {
+                        const avgTemp = sumTemp / count;
+                        const avgMoist = sumMoist / count;
+                        const avgMethane = sumMethane / count;
+                        const avgCO2 = sumCO2 / count;
+                        const avgHum = sumHum / count;
+
+                        lastLatest = {
+                            temperature: avgTemp,
+                            moisture: avgMoist,
+                            timestamp: latestTs
+                        };
+
+                        document.getElementById("temp").textContent = fmt(avgTemp, 1);
+                        document.getElementById("moist").textContent = fmt(avgMoist, 0);
+                        document.getElementById("methane").textContent = fmt(avgMethane, 0);
+                        document.getElementById("co2").textContent = fmt(avgCO2, 0);
+                        document.getElementById("humidity").textContent = fmt(avgHum, 0);
+
+                        // Use CURRENT TIME for the log entry to ensure it saves every 10s
+                        // even if the sensor timestamp hasn't changed.
+                        const nowTs = Math.floor(Date.now() / 1000);
+
+                        // SAVE TO LOGS for Chart History
+                        const logData = {
+                            temperature: avgTemp,
+                            moisture: avgMoist,
+                            methane: avgMethane,
+                            co2: avgCO2,
+                            humidity: avgHum,
+                            timestamp: nowTs // Use server/browser time for the log entry
+                        };
+
+                        // Avoid overwriting if timestamp exists? Firebase set overwrites.
+                        // Using timestamp as key.
+                        // Only save if we are "running"? Or always?
+                        // User said: "displayed every 10 seconds for testing".
+                        // Let's save it.
+                        try {
+                            await set(ref(db, `sensor_logs/${currentSessionId}/${nowTs}`), logData); // Use nowTs as the key
+                        } catch (e) {
+                            console.error("Error saving log:", e);
+                        }
+
+                        if (latestTs) {
+                            document.getElementById("lastUpdate").textContent =
+                                new Date(latestTs * 1000).toLocaleString();
+                        }
+
+                        applyTempAlert();
+                        refreshChart();
+                    }
+                }
+            } catch (err) {
+                console.error("Poll Data Error:", err);
+            }
+
+            // B. Fetch Image from Storage (LIST ALL approach)
+            try {
+                // Modified: Scan folder instead of assuming 'latest.jpg'
+                // This handles random filenames like "55.jp" or timestamps.
+                const listRef = storageRef(storage, `images/${currentSessionId}`);
+                const res = await listAll(listRef);
+
+                if (res.items.length > 0) {
+                    console.log("Found images in storage:", res.items.map(i => i.name));
+
+                    // Sort by numeric value descending
+                    const sortedItems = res.items.sort((a, b) => {
+                        const numA = parseInt(a.name) || 0;
+                        const numB = parseInt(b.name) || 0;
+                        return numB - numA;
+                    });
+
+                    // 1. Update LATEST image (Live View)
+                    const latestItem = sortedItems[0];
+                    const latestUrl = await getDownloadURL(latestItem);
+
+                    if (latestUrl) {
+                        // Update UI if changed
+                        if (imgEl.getAttribute("data-last-name") !== latestItem.name) {
+                            // Fix: Add cachebuster to ensure browser doesn't use stale cached image
+                            // even if URL is same (though specific token URL usually changes, but just in case)
+                            const cacheBuster = "&cb=" + new Date().getTime();
+                            imgEl.src = latestUrl + cacheBuster;
+                            imgEl.style.display = "block";
+                            imgPlaceholderEl.style.display = "none";
+                            imgTimeEl.textContent = "Live: " + new Date().toLocaleTimeString();
+                            imgEl.setAttribute("data-last-name", latestItem.name);
+                        }
+                    }
+
+                    // 2. BACKFILL HISTORY (Sync Storage -> DB)
+                    // Check which items are missing from our DB history (imageEntries)
+                    // imageEntries is [[ts, {url, ...}], ...] 
+
+                    for (const item of sortedItems) {
+                        const tsFromFilename = parseInt(item.name) || 0;
+                        if (tsFromFilename === 0) continue; // Skip weird files
+
+                        // Check if we already have this valid timestamp in our history
+                        const exists = imageEntries.some(([key, val]) => {
+                            // Compare key (timestamp) or filename if stored
+                            // We stored timestamp as the key in DB.
+                            return key === tsFromFilename;
+                        });
+
+                        if (!exists) {
+                            console.log(`Syncing missing history image: ${item.name} (TS: ${tsFromFilename}) -> DB`);
+                            // Download URL
+                            try {
+                                const url = await getDownloadURL(item);
+                                // Save to DB using the filename's number as the key/timestamp
+                                await set(ref(db, `images/${currentSessionId}/${tsFromFilename}`), {
+                                    url: url,
+                                    timestamp: tsFromFilename,
+                                    filename: item.name
+                                });
+                            } catch (err) {
+                                console.error("Error syncing image " + item.name, err);
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Poll Image Error:", err);
+            }
         }
+
+        function updateSessionUI() {
+            const isRunning = (currentStatus === "running");
+            statusEl.textContent = isRunning ? "Running" : "Stopped";
+            statusEl.classList.remove("status-running", "status-stopped");
+            statusEl.classList.add(isRunning ? "status-running" : "status-stopped");
+
+            btnStart.disabled = isRunning;
+            btnStop.disabled = !isRunning;
+
+            // Change Text to Restart if stopped
+            if (!isRunning) {
+                btnStart.textContent = "Restart";
+            } else {
+                btnStart.textContent = "Start";
+            }
+        }
+
+        let alertTimeoutTemp, alertTimeoutMoist;
 
         function applyTempAlert() {
             if (!lastLatest) return;
@@ -588,31 +756,46 @@
             const moistAlertEl = document.getElementById("moistAlert");
 
             if (!isNaN(tempVal) && (tempVal < temp_min || tempVal > temp_max)) {
-                tempAlertEl.textContent = `⚠️ Temperature ${fmt(tempVal, 1)} °C outside range ${temp_min}–${temp_max} °C.`;
-                tempAlertEl.style.display = "block";
-                tempAlertEl.style.color = "#ff4d4f";
-            } else {
-                tempAlertEl.style.display = "none";
+                if (tempAlertEl.style.display !== "block") {
+                    tempAlertEl.textContent = `High/Low Temp: ${fmt(tempVal, 1)} °C`;
+                    tempAlertEl.style.display = "block";
+                    tempAlertEl.style.color = "#fff";
+
+                    // Auto-hide after 5s
+                    if (alertTimeoutTemp) clearTimeout(alertTimeoutTemp);
+                    alertTimeoutTemp = setTimeout(() => {
+                        tempAlertEl.style.display = "none";
+                        checkCardStatus();
+                    }, 5000);
+                }
             }
 
             if (!isNaN(moistVal) && (moistVal < moist_min || moistVal > moist_max)) {
-                moistAlertEl.textContent = `⚠️ Moisture ${fmt(moistVal, 0)}% outside range ${moist_min}–${moist_max}%.`;
-                moistAlertEl.style.display = "block";
-                moistAlertEl.style.color = "#ffa940";
-            } else {
-                moistAlertEl.style.display = "none";
+                if (moistAlertEl.style.display !== "block") {
+                    moistAlertEl.textContent = `High/Low Moisture: ${fmt(moistVal, 0)}%`;
+                    moistAlertEl.style.display = "block";
+                    moistAlertEl.style.color = "#fff";
+
+                    // Auto-hide after 5s
+                    if (alertTimeoutMoist) clearTimeout(alertTimeoutMoist);
+                    alertTimeoutMoist = setTimeout(() => {
+                        moistAlertEl.style.display = "none";
+                        checkCardStatus();
+                    }, 5000);
+                }
             }
+
+            checkCardStatus();
+        }
+
+        function checkCardStatus() {
+            const tempAlertEl = document.getElementById("tempAlert");
+            const moistAlertEl = document.getElementById("moistAlert");
 
             if (currentCard) {
                 if ((tempAlertEl.style.display === "block") || (moistAlertEl.style.display === "block")) {
                     currentCard.classList.add("card-alert");
-
-                    // Check WA Alert
-                    const activeAlerts = [];
-                    if (tempAlertEl.style.display === "block") activeAlerts.push(tempAlertEl.textContent);
-                    if (moistAlertEl.style.display === "block") activeAlerts.push(moistAlertEl.textContent);
-
-                    checkAndSendWA(activeAlerts.join("\n"));
+                    // Check WA Alert logic if needed...
                 } else {
                     currentCard.classList.remove("card-alert");
                 }
@@ -626,6 +809,7 @@
             const cooldown = 300; // 5 minutes
 
             if (!enabled || !number || message.length === 0) return;
+            return; // TEMPORARILY DISABLED AS REQUESTED
 
             if (now - lastWaSent > cooldown) {
                 console.log("Sending WA Alert:", message);
@@ -674,7 +858,12 @@
 
             pageItems.forEach(([ts, item]) => {
                 if (!item || !item.url) return;
-                const t = item.timestamp || ts;
+                const t = Number(item.timestamp || ts); // Ensure t is a number for comparison
+
+                // Filter junk timestamps (e.g. "55") to prevent 1970 dates?
+                // Allow all for now to debug history
+                if (!t) return;
+
                 const timeStr = t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : String(ts);
 
                 const div = document.createElement("div");
@@ -686,6 +875,12 @@
                 img.src = item.url;
                 img.alt = `Compost ${timeStr}`;
                 img.loading = "lazy";
+
+                // Hide if broken
+                img.onerror = () => {
+                    div.style.display = 'none';
+                };
+
                 imgContainer.appendChild(img);
 
                 const meta = document.createElement("div");
@@ -729,10 +924,22 @@
         // ======= BUTTON HANDLERS =======
         btnStart.addEventListener("click", async () => {
             console.log("Btn Start Clicked");
+
+            // "setelah tombol restart ada opsi ingin download csv atau tidak"
+            // We assume "Restart" means starting again from a stopped state.
+            if (confirm("Before starting, do you want to download the CSV logs?")) {
+                await exportCSV();
+            }
+
             try {
                 if (!sessionRef) {
                     throw new Error("Session Ref is missing");
                 }
+
+                // NEW: Clear logs to reset chart because "Restart" implies fresh run
+                if (logsRef) await remove(logsRef);
+                if (imagesRef) await remove(imagesRef);
+
                 const now = Math.floor(Date.now() / 1000);
                 console.log("Updating session status to running...");
                 await update(sessionRef, { status: "running", started_at: now, ended_at: null });
@@ -753,10 +960,14 @@
                 temp_min: Number(thTempMinEl.value),
                 temp_max: Number(thTempMaxEl.value),
                 moist_min: Number(thMoistMinEl.value),
-                moist_max: Number(thMoistMaxEl.value),
-                wa_number: document.getElementById("waNumber").value,
-                wa_enabled: document.getElementById("waEnabled").checked
+                moist_max: Number(thMoistMaxEl.value)
             };
+
+            const waNumEl = document.getElementById("waNumber");
+            if (waNumEl) t.wa_number = waNumEl.value;
+
+            const waEnEl = document.getElementById("waEnabled");
+            if (waEnEl) t.wa_enabled = waEnEl.checked;
             await update(thresholdRef, t);
             alert("Settings updated for " + currentSessionId);
         });
@@ -902,7 +1113,11 @@
         }
 
         const btnExportCSV = document.getElementById("btnExportCSV");
-        btnExportCSV.addEventListener("click", async () => {
+        btnExportCSV.addEventListener("click", () => {
+            exportCSV();
+        });
+
+        async function exportCSV() {
             if (!logsRef) return;
             // Download all data for session (not just last 50)
             const snap = await get(query(logsRef, orderByKey()));
@@ -926,7 +1141,7 @@
             a.download = `kompos_session_${currentSessionId}.csv`;
             a.click();
             URL.revokeObjectURL(url);
-        });
+        }
 
 
 
